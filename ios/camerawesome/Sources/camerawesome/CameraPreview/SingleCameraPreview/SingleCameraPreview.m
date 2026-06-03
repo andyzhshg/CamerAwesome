@@ -200,8 +200,13 @@
          targetSize = CGSizeZero;
       }
   } else if (_imageStreamController.streamImages) {
-      // If only streaming (not recording), force 720p for potential stability (based on commit history)
-      targetSize = CGSizeMake(720, 1280);
+      // Use the configured aspect for analysis streaming (was always 9:16 @ 720p).
+      // Ratio_4_3 photos need a 4:3 session preset so preview FOV matches capture.
+      if (_aspectRatio == Ratio4_3) {
+          targetSize = CGSizeMake(480, 640);
+      } else {
+          targetSize = CGSizeMake(720, 1280);
+      }
   } else if (CGSizeEqualToSize(currentPreviewSize, CGSizeZero)) {
       // If neither recording nor streaming, and no size provided, use best quality
       targetSize = CGSizeZero;
