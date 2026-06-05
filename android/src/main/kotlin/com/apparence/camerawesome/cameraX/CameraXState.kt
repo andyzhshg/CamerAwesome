@@ -173,7 +173,7 @@ data class CameraXState(
 
                 isFirst = false
                 useCaseGroupBuilder.setViewPort(
-                    ViewPort.Builder(rational, activity.windowManager.defaultDisplay.rotation).build()
+                    ViewPort.Builder(rational, displayRotation(activity)).build()
                 )
                 singleCameraConfigs.add(
                     ConcurrentCamera.SingleCameraConfig(
@@ -257,7 +257,7 @@ data class CameraXState(
             } else {
                 imageAnalysis = null
             }
-            val displayRotation = activity.windowManager.defaultDisplay.rotation
+            val displayRotation = displayRotation(activity)
             useCaseGroupBuilder.setViewPort(ViewPort.Builder(rational, displayRotation).build())
                 .build()
 
@@ -465,6 +465,15 @@ data class CameraXState(
             "RATIO_16_9" -> Rational(9, 16)
             "RATIO_1_1" -> Rational(1, 1)
             else -> Rational(3, 4)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun displayRotation(activity: Activity): Int {
+        return if (android.os.Build.VERSION.SDK_INT >= 30) {
+            activity.display?.rotation ?: Surface.ROTATION_0
+        } else {
+            activity.windowManager.defaultDisplay.rotation
         }
     }
 }
