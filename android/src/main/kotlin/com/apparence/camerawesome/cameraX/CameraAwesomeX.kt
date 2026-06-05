@@ -381,7 +381,6 @@ class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
             ImageCapture.OutputFileOptions.Builder(imageFile).setMetadata(metadata).build()
 //        for (imageCapture in cameraState.imageCaptures) {
         imageCapture.targetRotation = orientationStreamListener!!.surfaceOrientation
-        Log.d("CameraX", "takePhoto targetRotation=${imageCapture.targetRotation}")
         imageCapture.takePicture(outputFileOptions,
             ContextCompat.getMainExecutor(activity!!),
             object : ImageCapture.OnImageSavedCallback {

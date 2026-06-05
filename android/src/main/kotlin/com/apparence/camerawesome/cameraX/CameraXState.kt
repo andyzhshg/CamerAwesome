@@ -257,11 +257,8 @@ data class CameraXState(
             } else {
                 imageAnalysis = null
             }
-            // TODO Orientation might be wrong, to be verified
             val displayRotation = activity.windowManager.defaultDisplay.rotation
-            val viewPort = ViewPort.Builder(rational, displayRotation).build()
-            Log.d("CameraX", "ViewPort rational=$rational rotation=$displayRotation")
-            useCaseGroupBuilder.setViewPort(viewPort)
+            useCaseGroupBuilder.setViewPort(ViewPort.Builder(rational, displayRotation).build())
                 .build()
 
             concurrentCamera = null
@@ -328,7 +325,6 @@ data class CameraXState(
     private fun surfaceProvider(executor: Executor, cameraId: String): Preview.SurfaceProvider {
         return Preview.SurfaceProvider { request: SurfaceRequest ->
             val resolution = request.resolution
-            Log.d("CameraX", "surfaceProvider resolution=${resolution.width}x${resolution.height}")
             val texture = textureEntries[cameraId]!!.surfaceTexture()
             texture.setDefaultBufferSize(resolution.width, resolution.height)
             val surface = Surface(texture)
