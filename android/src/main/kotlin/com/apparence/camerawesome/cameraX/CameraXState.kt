@@ -345,8 +345,6 @@ data class CameraXState(
             }
         }
     }
-        }
-    }
 
     fun setZoom(normalizedZoom: Float) {
         val clampedZoom = normalizedZoom.coerceIn(0f, 1f)
