@@ -328,15 +328,7 @@ data class CameraXState(
     private fun surfaceProvider(executor: Executor, cameraId: String): Preview.SurfaceProvider {
         return Preview.SurfaceProvider { request: SurfaceRequest ->
             val resolution = request.resolution
-            val transformationInfo = request.transformationInfo
-            Log.d(
-                "CameraX",
-                "surfaceProvider resolution=${resolution.width}x${resolution.height} " +
-                    "transformationInfo.cropRect=${transformationInfo?.cropRect} " +
-                    "rotationDegrees=${transformationInfo?.rotationDegrees} " +
-                    "sensorToBuffer=${transformationInfo?.sensorToBufferTransform} " +
-                    "isMirrored=${transformationInfo?.isMirrored}"
-            )
+            Log.d("CameraX", "surfaceProvider resolution=${resolution.width}x${resolution.height}")
             val texture = textureEntries[cameraId]!!.surfaceTexture()
             texture.setDefaultBufferSize(resolution.width, resolution.height)
             val surface = Surface(texture)
