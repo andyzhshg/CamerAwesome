@@ -173,7 +173,7 @@ data class CameraXState(
 
                 isFirst = false
                 useCaseGroupBuilder.setViewPort(
-                    ViewPort.Builder(rational, Surface.ROTATION_0).build()
+                    ViewPort.Builder(rational, activity.windowManager.defaultDisplay.rotation).build()
                 )
                 singleCameraConfigs.add(
                     ConcurrentCamera.SingleCameraConfig(
@@ -258,7 +258,10 @@ data class CameraXState(
                 imageAnalysis = null
             }
             // TODO Orientation might be wrong, to be verified
-            useCaseGroupBuilder.setViewPort(ViewPort.Builder(rational, Surface.ROTATION_0).build())
+            val displayRotation = activity.windowManager.defaultDisplay.rotation
+            val viewPort = ViewPort.Builder(rational, displayRotation).build()
+            Log.d("CameraX", "ViewPort rational=$rational rotation=$displayRotation")
+            useCaseGroupBuilder.setViewPort(viewPort)
                 .build()
 
             concurrentCamera = null
@@ -323,17 +326,25 @@ data class CameraXState(
 
     @SuppressLint("RestrictedApi")
     private fun surfaceProvider(executor: Executor, cameraId: String): Preview.SurfaceProvider {
-//        Log.d("SurfaceProviderCamX", "Creating surface provider for $cameraId")
         return Preview.SurfaceProvider { request: SurfaceRequest ->
             val resolution = request.resolution
-            //Log.d("CameraX", "surfaceProvider -> Preview size: width=${resolution.width}, height=${resolution.height}")
+            val transformationInfo = request.transformationInfo
+            Log.d(
+                "CameraX",
+                "surfaceProvider resolution=${resolution.width}x${resolution.height} " +
+                    "transformationInfo.cropRect=${transformationInfo?.cropRect} " +
+                    "rotationDegrees=${transformationInfo?.rotationDegrees} " +
+                    "sensorToBuffer=${transformationInfo?.sensorToBufferTransform} " +
+                    "isMirrored=${transformationInfo?.isMirrored}"
+            )
             val texture = textureEntries[cameraId]!!.surfaceTexture()
             texture.setDefaultBufferSize(resolution.width, resolution.height)
             val surface = Surface(texture)
             request.provideSurface(surface, executor) {
-//                Log.d("CameraX", "Surface request result: ${it.resultCode}")
                 surface.release()
             }
+        }
+    }
         }
     }
 
