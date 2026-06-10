@@ -106,6 +106,8 @@ class CameraAwesomeBuilder extends StatefulWidget {
 
   final PictureInPictureConfigBuilder? pictureInPictureConfigBuilder;
 
+  final double previewDisplayScale;
+
   /// THe default filter to use when the camera is started.
   final AwesomeFilter? defaultFilter;
 
@@ -139,6 +141,7 @@ class CameraAwesomeBuilder extends StatefulWidget {
     required this.pictureInPictureConfigBuilder,
     this.availableFilters,
     this.onMediaCaptureEvent,
+    this.previewDisplayScale = 1.0,
   });
 
   /// Use the camera with the built-in interface.
@@ -239,6 +242,7 @@ class CameraAwesomeBuilder extends StatefulWidget {
     PictureInPictureConfigBuilder? pictureInPictureConfigBuilder,
     List<AwesomeFilter>? filters,
     OnMediaCaptureEvent? onMediaCaptureEvent,
+    double previewDisplayScale = 1.0,
   }) : this._(
           sensorConfig: sensorConfig ??
               SensorConfig.single(
@@ -262,6 +266,7 @@ class CameraAwesomeBuilder extends StatefulWidget {
           pictureInPictureConfigBuilder: pictureInPictureConfigBuilder,
           availableFilters: filters,
           onMediaCaptureEvent: onMediaCaptureEvent,
+          previewDisplayScale: previewDisplayScale,
         );
 
   /// Use this constructor when you don't want to take pictures or record videos.
@@ -495,6 +500,7 @@ class _CameraWidgetBuilder extends State<CameraAwesomeBuilder>
                         previewDecoratorBuilder: widget.previewDecoratorBuilder,
                         pictureInPictureConfigBuilder:
                             widget.pictureInPictureConfigBuilder,
+                        previewDisplayScale: widget.previewDisplayScale,
                       ),
               ),
             ],

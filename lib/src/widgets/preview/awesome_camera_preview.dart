@@ -28,6 +28,7 @@ class AwesomeCameraPreview extends StatefulWidget {
   final EdgeInsets padding;
   final Alignment alignment;
   final PictureInPictureConfigBuilder? pictureInPictureConfigBuilder;
+  final double previewDisplayScale;
 
   const AwesomeCameraPreview({
     super.key,
@@ -41,6 +42,7 @@ class AwesomeCameraPreview extends StatefulWidget {
     required this.padding,
     required this.alignment,
     this.pictureInPictureConfigBuilder,
+    this.previewDisplayScale = 1.0,
   });
 
   @override
@@ -167,6 +169,7 @@ class AwesomeCameraPreviewState extends State<AwesomeCameraPreview> {
                   previewPadding: widget.padding,
                   constraints: constraints,
                   sensor: widget.state.sensorConfig.sensors.first,
+                  previewDisplayScale: widget.previewDisplayScale,
                   onPreviewCalculated: (preview) {
                     WidgetsBinding.instance.addPostFrameCallback((timeStamp) {
                       if (mounted) {

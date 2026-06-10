@@ -17,6 +17,7 @@ class AnimatedPreviewFit extends StatefulWidget {
   final Widget child;
   final OnPreviewCalculated? onPreviewCalculated;
   final Sensor sensor;
+  final double previewDisplayScale;
 
   const AnimatedPreviewFit({
     super.key,
@@ -28,6 +29,7 @@ class AnimatedPreviewFit extends StatefulWidget {
     required this.child,
     this.onPreviewCalculated,
     this.previewPadding,
+    this.previewDisplayScale = 1.0,
   });
 
   @override
@@ -111,6 +113,7 @@ class _AnimatedPreviewFitState extends State<AnimatedPreviewFit> {
           scale: ratio,
           maxSize: maxSize!,
           previewPadding: widget.previewPadding,
+          previewDisplayScale: widget.previewDisplayScale,
           child: child!,
         );
       },
@@ -131,6 +134,7 @@ class PreviewFitWidget extends StatelessWidget {
   final double scale;
   final Size maxSize;
   final EdgeInsets? previewPadding;
+  final double previewDisplayScale;
 
   const PreviewFitWidget({
     super.key,
@@ -142,6 +146,7 @@ class PreviewFitWidget extends StatelessWidget {
     required this.scale,
     required this.maxSize,
     this.previewPadding,
+    this.previewDisplayScale = 1.0,
   });
 
   @override
@@ -165,7 +170,11 @@ class PreviewFitWidget extends StatelessWidget {
             child: SizedBox(
               width: previewSize.width,
               height: previewSize.height,
-              child: child,
+              child: Transform.scale(
+                scale: previewDisplayScale,
+                alignment: Alignment.center,
+                child: child,
+              ),
             ),
           ),
         ),
