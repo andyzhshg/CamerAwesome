@@ -128,6 +128,7 @@ NSInteger const MaxPendingProcessedImage = 4;
   
   NSMutableArray *planes = [NSMutableArray array];
 
+  // mlkit input is rotated to upright per device orientation (preview is left raw).
   NSInteger uprightDegrees = UprightRotationDegreesForDeviceOrientation(orientation);
   if (uprightDegrees != 0) {
     void *baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer);

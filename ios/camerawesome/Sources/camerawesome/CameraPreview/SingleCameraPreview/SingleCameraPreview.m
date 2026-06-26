@@ -165,8 +165,11 @@
   // Mirror the preview only on portrait mode
   [_captureConnection setAutomaticallyAdjustsVideoMirroring:NO];
   [_captureConnection setVideoMirrored:(_cameraSensorPosition == PigeonSensorPositionFront)];
+  // PREVIEW = raw sensor, fixed Portrait, NEVER software-rotated (user directive:
+  // preview always shows the raw sensor image). mlkit input is rotated separately
+  // via CopyUprightBGRA8888Bytes so detection works in every device orientation.
   [_captureConnection setVideoOrientation:AVCaptureVideoOrientationPortrait];
-  [_previewTexture setPreviewRotationDegrees:90]; // TASK0-B1-SPIKE: hardcoded landscape rotation
+  [_previewTexture setPreviewRotationDegrees:0];
 }
 
 - (void)dealloc {
@@ -239,8 +242,8 @@
 
 /// Get current video prewiew size
 - (CGSize)getEffectivPreviewSize {
-  // TASK0-B1-SPIKE: swap to match previewRotationDegrees=90 (landscape)
-  return CGSizeMake(_currentPreviewSize.height, _currentPreviewSize.width);
+  // Preview = raw sensor (fixed orientation), report the sensor size as-is.
+  return _currentPreviewSize;
 }
 
 // Get max zoom level
