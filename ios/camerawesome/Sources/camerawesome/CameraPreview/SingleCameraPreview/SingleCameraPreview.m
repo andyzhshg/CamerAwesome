@@ -166,6 +166,7 @@
   [_captureConnection setAutomaticallyAdjustsVideoMirroring:NO];
   [_captureConnection setVideoMirrored:(_cameraSensorPosition == PigeonSensorPositionFront)];
   [_captureConnection setVideoOrientation:AVCaptureVideoOrientationPortrait];
+  [_previewTexture setPreviewRotationDegrees:90]; // TASK0-B1-SPIKE: hardcoded landscape rotation
 }
 
 - (void)dealloc {
@@ -238,7 +239,8 @@
 
 /// Get current video prewiew size
 - (CGSize)getEffectivPreviewSize {
-  return _currentPreviewSize;
+  // TASK0-B1-SPIKE: swap to match previewRotationDegrees=90 (landscape)
+  return CGSizeMake(_currentPreviewSize.height, _currentPreviewSize.width);
 }
 
 // Get max zoom level
