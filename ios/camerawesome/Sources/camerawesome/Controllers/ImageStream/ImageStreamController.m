@@ -6,6 +6,93 @@
 //
 
 #import "ImageStreamController.h"
+#import <stdint.h>
+
+static const size_t BgraBytesPerPixel = 4;
+
+static NSInteger UprightRotationDegreesForDeviceOrientation(UIDeviceOrientation orientation) {
+  switch (orientation) {
+    case UIDeviceOrientationLandscapeLeft:
+      return 90;
+    case UIDeviceOrientationLandscapeRight:
+      return 270;
+    case UIDeviceOrientationPortraitUpsideDown:
+      return 180;
+    case UIDeviceOrientationPortrait:
+    default:
+      return 0;
+  }
+}
+
+static NSString *DeviceOrientationName(UIDeviceOrientation orientation) {
+  switch (orientation) {
+    case UIDeviceOrientationLandscapeLeft:
+      return @"landscape_left";
+    case UIDeviceOrientationLandscapeRight:
+      return @"landscape_right";
+    case UIDeviceOrientationPortraitUpsideDown:
+      return @"portrait_down";
+    case UIDeviceOrientationPortrait:
+    default:
+      return @"portrait_up";
+  }
+}
+
+static NSData *CopyUprightBGRA8888Bytes(
+  const void *source,
+  size_t sourceWidth,
+  size_t sourceHeight,
+  size_t sourceBytesPerRow,
+  NSInteger rotationDegrees,
+  size_t *outputWidth,
+  size_t *outputHeight,
+  size_t *outputBytesPerRow
+) {
+  size_t dstW = sourceWidth;
+  size_t dstH = sourceHeight;
+  if (rotationDegrees == 90 || rotationDegrees == 270) {
+    dstW = sourceHeight;
+    dstH = sourceWidth;
+  }
+  size_t dstBytesPerRow = dstW * BgraBytesPerPixel;
+  NSMutableData *dstData = [NSMutableData dataWithLength:dstBytesPerRow * dstH];
+  uint8_t *dst = [dstData mutableBytes];
+  const uint8_t *src = (const uint8_t *)source;
+  for (size_t y = 0; y < sourceHeight; y++) {
+    for (size_t x = 0; x < sourceWidth; x++) {
+      const uint8_t *srcPixel = src + y * sourceBytesPerRow + x * BgraBytesPerPixel;
+      size_t dstX;
+      size_t dstY;
+      switch (rotationDegrees) {
+        case 90:
+          dstX = sourceHeight - 1 - y;
+          dstY = x;
+          break;
+        case 180:
+          dstX = sourceWidth - 1 - x;
+          dstY = sourceHeight - 1 - y;
+          break;
+        case 270:
+          dstX = y;
+          dstY = sourceWidth - 1 - x;
+          break;
+        default:
+          dstX = x;
+          dstY = y;
+          break;
+      }
+      uint8_t *dstPixel = dst + dstY * dstBytesPerRow + dstX * BgraBytesPerPixel;
+      dstPixel[0] = srcPixel[0];
+      dstPixel[1] = srcPixel[1];
+      dstPixel[2] = srcPixel[2];
+      dstPixel[3] = srcPixel[3];
+    }
+  }
+  *outputWidth = dstW;
+  *outputHeight = dstH;
+  *outputBytesPerRow = dstBytesPerRow;
+  return dstData;
+}
 
 @implementation ImageStreamController
 
@@ -40,52 +127,74 @@ NSInteger const MaxPendingProcessedImage = 4;
   size_t imageHeight = CVPixelBufferGetHeight(pixelBuffer);
   
   NSMutableArray *planes = [NSMutableArray array];
-  
-  const Boolean isPlanar = CVPixelBufferIsPlanar(pixelBuffer);
-  size_t planeCount;
-  if (isPlanar) {
-    planeCount = CVPixelBufferGetPlaneCount(pixelBuffer);
-  } else {
-    planeCount = 1;
-  }
-  
-  for (int i = 0; i < planeCount; i++) {
-    void *planeAddress;
-    size_t bytesPerRow;
-    size_t height;
-    size_t width;
-    
-    if (isPlanar) {
-      planeAddress = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, i);
-      bytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, i);
-      height = CVPixelBufferGetHeightOfPlane(pixelBuffer, i);
-      width = CVPixelBufferGetWidthOfPlane(pixelBuffer, i);
-    } else {
-      planeAddress = CVPixelBufferGetBaseAddress(pixelBuffer);
-      bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer);
-      height = CVPixelBufferGetHeight(pixelBuffer);
-      width = CVPixelBufferGetWidth(pixelBuffer);
-    }
-    
-    NSNumber *length = @(bytesPerRow * height);
-    NSData *bytes = [NSData dataWithBytes:planeAddress length:length.unsignedIntegerValue];
-    
+
+  NSInteger uprightDegrees = UprightRotationDegreesForDeviceOrientation(orientation);
+  if (uprightDegrees != 0) {
+    void *baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer);
+    size_t outW;
+    size_t outH;
+    size_t outBPR;
+    NSData *rotated = CopyUprightBGRA8888Bytes(
+      baseAddress,
+      CVPixelBufferGetWidth(pixelBuffer),
+      CVPixelBufferGetHeight(pixelBuffer),
+      CVPixelBufferGetBytesPerRow(pixelBuffer),
+      uprightDegrees,
+      &outW,
+      &outH,
+      &outBPR);
     [planes addObject:@{
-      @"bytesPerRow": @(bytesPerRow),
-      @"width": @(width),
-      @"height": @(height),
-      @"bytes": [FlutterStandardTypedData typedDataWithBytes:bytes],
+      @"bytesPerRow": @(outBPR),
+      @"width": @(outW),
+      @"height": @(outH),
+      @"bytes": [FlutterStandardTypedData typedDataWithBytes:rotated],
     }];
+    imageWidth = outW;
+    imageHeight = outH;
+  } else {
+    const Boolean isPlanar = CVPixelBufferIsPlanar(pixelBuffer);
+    size_t planeCount;
+    if (isPlanar) {
+      planeCount = CVPixelBufferGetPlaneCount(pixelBuffer);
+    } else {
+      planeCount = 1;
+    }
+    for (int i = 0; i < planeCount; i++) {
+      void *planeAddress;
+      size_t bytesPerRow;
+      size_t height;
+      size_t width;
+      if (isPlanar) {
+        planeAddress = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, i);
+        bytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, i);
+        height = CVPixelBufferGetHeightOfPlane(pixelBuffer, i);
+        width = CVPixelBufferGetWidthOfPlane(pixelBuffer, i);
+      } else {
+        planeAddress = CVPixelBufferGetBaseAddress(pixelBuffer);
+        bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer);
+        height = CVPixelBufferGetHeight(pixelBuffer);
+        width = CVPixelBufferGetWidth(pixelBuffer);
+      }
+      NSNumber *length = @(bytesPerRow * height);
+      NSData *bytes = [NSData dataWithBytes:planeAddress length:length.unsignedIntegerValue];
+      [planes addObject:@{
+        @"bytesPerRow": @(bytesPerRow),
+        @"width": @(width),
+        @"height": @(height),
+        @"bytes": [FlutterStandardTypedData typedDataWithBytes:bytes],
+      }];
+    }
   }
-  
+
   CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
-  
+
   NSDictionary *imageBuffer = @{
     @"width": [NSNumber numberWithUnsignedLong:imageWidth],
     @"height": [NSNumber numberWithUnsignedLong:imageHeight],
-    @"format": @"bgra8888", // TODO: change this dynamically
+    @"format": @"bgra8888",
     @"planes": planes,
-    @"rotation": [self getInputImageOrientation:orientation]
+    @"rotation": @"rotation0deg",
+    @"deviceOrientation": DeviceOrientationName(orientation),
   };
   
   dispatch_async(dispatch_get_main_queue(), ^{
