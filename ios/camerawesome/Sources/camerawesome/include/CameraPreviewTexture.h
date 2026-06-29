@@ -19,7 +19,6 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)dealloc;
 
 @property(readonly) _Atomic(CVPixelBufferRef) latestPixelBuffer;
-@property(nonatomic) NSInteger previewRotationDegrees;
 
 @end
 

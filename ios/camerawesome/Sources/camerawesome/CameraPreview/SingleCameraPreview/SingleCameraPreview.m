@@ -169,7 +169,6 @@
   // preview always shows the raw sensor image). mlkit input is rotated separately
   // via CopyUprightBGRA8888Bytes so detection works in every device orientation.
   [_captureConnection setVideoOrientation:AVCaptureVideoOrientationPortrait];
-  [_previewTexture setPreviewRotationDegrees:0];
 }
 
 - (void)dealloc {
