@@ -6,6 +6,12 @@ import 'package:flutter/material.dart';
 
 final previewWidgetKey = GlobalKey();
 
+typedef CamerawesomeNativeSpikeDartEvent = void Function(
+    String event, Map<String, Object?> fields);
+
+/// Temporary Batch 2 telemetry seam. Null in every production launch.
+CamerawesomeNativeSpikeDartEvent? camerawesomeNativeSpikeDartEvent;
+
 typedef OnPreviewCalculated = void Function(AnalysisPreview preview);
 
 class AnimatedPreviewFit extends StatefulWidget {
@@ -64,7 +70,8 @@ class _AnimatedPreviewFitState extends State<AnimatedPreviewFit> {
   void didUpdateWidget(covariant AnimatedPreviewFit oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.previewFit != oldWidget.previewFit ||
-        widget.previewSize != oldWidget.previewSize ||
+        widget.previewSize.width != oldWidget.previewSize.width ||
+        widget.previewSize.height != oldWidget.previewSize.height ||
         widget.constraints != oldWidget.constraints) {
       var oldsizeCalculator = PreviewSizeCalculator(
         previewFit: oldWidget.previewFit,
@@ -87,6 +94,19 @@ class _AnimatedPreviewFitState extends State<AnimatedPreviewFit> {
   }
 
   void _handPreviewCalculated() {
+    camerawesomeNativeSpikeDartEvent?.call('preview_calculated', {
+      'previewFit': widget.previewFit.name,
+      'previewDisplayScale': widget.previewDisplayScale,
+      'previewSize': {
+        'width': sizeCalculator!.maxSize.width,
+        'height': sizeCalculator!.maxSize.height,
+      },
+      'offset': {
+        'dx': sizeCalculator!.offset.dx,
+        'dy': sizeCalculator!.offset.dy,
+      },
+      'scale': sizeCalculator!.zoom,
+    });
     if (widget.onPreviewCalculated != null) {
       widget.onPreviewCalculated!(
         AnalysisPreview(
@@ -151,6 +171,18 @@ class PreviewFitWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    camerawesomeNativeSpikeDartEvent?.call('preview_fit_build', {
+      'previewFit': previewFit.name,
+      'previewDisplayScale': previewDisplayScale,
+      'constraints': {
+        'maxWidth': constraints.maxWidth,
+        'maxHeight': constraints.maxHeight,
+      },
+      'previewSize': {
+        'width': previewSize.width,
+        'height': previewSize.height,
+      },
+    });
     final transformController = TransformationController()
       ..value = (Matrix4.identity()..scale(scale));
 
@@ -171,6 +203,7 @@ class PreviewFitWidget extends StatelessWidget {
               width: previewSize.width,
               height: previewSize.height,
               child: Transform.scale(
+                key: const ValueKey('camerawesome-preview-display-scale'),
                 scale: previewDisplayScale,
                 alignment: Alignment.center,
                 child: child,

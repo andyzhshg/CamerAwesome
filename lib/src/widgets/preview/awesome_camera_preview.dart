@@ -171,6 +171,22 @@ class AwesomeCameraPreviewState extends State<AwesomeCameraPreview> {
                   sensor: widget.state.sensorConfig.sensors.first,
                   previewDisplayScale: widget.previewDisplayScale,
                   onPreviewCalculated: (preview) {
+                    camerawesomeNativeSpikeDartEvent?.call(
+                      'preview_calculated',
+                      {
+                        'previewFit': widget.previewFit.name,
+                        'previewDisplayScale': widget.previewDisplayScale,
+                        'analysisPreview': {
+                          'nativeWidth': preview.nativePreviewSize.width,
+                          'nativeHeight': preview.nativePreviewSize.height,
+                          'previewWidth': preview.previewSize.width,
+                          'previewHeight': preview.previewSize.height,
+                          'offsetX': preview.offset.dx,
+                          'offsetY': preview.offset.dy,
+                          'scale': preview.scale,
+                        },
+                      },
+                    );
                     WidgetsBinding.instance.addPostFrameCallback((timeStamp) {
                       if (mounted) {
                         setState(() {

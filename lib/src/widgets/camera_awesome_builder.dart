@@ -354,6 +354,9 @@ class _CameraWidgetBuilder extends State<CameraAwesomeBuilder>
 
   @override
   void dispose() {
+    camerawesomeNativeSpikeDartEvent?.call('lifecycle', {
+      'eventDetail': 'dart_builder_dispose',
+    });
     WidgetsBinding.instance.removeObserver(this);
     _cameraContext.dispose();
     _captureStateListener?.cancel();
@@ -367,6 +370,9 @@ class _CameraWidgetBuilder extends State<CameraAwesomeBuilder>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    camerawesomeNativeSpikeDartEvent?.call('lifecycle', {
+      'eventDetail': state.name,
+    });
     switch (state) {
       case AppLifecycleState.resumed:
         _cameraContext.sensorConfig.setZoomToOneX();
@@ -387,6 +393,9 @@ class _CameraWidgetBuilder extends State<CameraAwesomeBuilder>
   @override
   void initState() {
     super.initState();
+    camerawesomeNativeSpikeDartEvent?.call('host_build', {
+      'eventDetail': 'camera_builder_init',
+    });
     WidgetsBinding.instance.addObserver(this);
 
     _cameraContext = CameraContext.create(

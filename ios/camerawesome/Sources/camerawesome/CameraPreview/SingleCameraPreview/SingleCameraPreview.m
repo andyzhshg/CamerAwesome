@@ -7,8 +7,55 @@
 
 #import "SingleCameraPreview.h"
 
+extern uint64_t B2NativeSpikeMonotonicUs(void);
+extern NSDictionary * _Nullable B2NativeSpikeContextSnapshot(void);
+extern NSDictionary *B2NativeSpikeCountersSnapshot(BOOL incrementSetup, BOOL incrementBind);
+extern void B2NativeSpikeEmit(NSDictionary *contextSnapshot, NSString *event, NSDictionary *fields);
+
+@interface ImageStreamController (B2NativeSpike)
+- (void)b2ConfigureProducerLens:(NSString *)lens nativeSessionId:(NSString *)nativeSessionId;
+- (void)b2MarkResumeAtMonotonicUs:(uint64_t)monotonicUs contextRevision:(NSInteger)contextRevision;
+@end
+
+static NSString *B2NativeSpikeActualLens(AVCaptureDevice *device) {
+  if (device.position == AVCaptureDevicePositionFront) {
+    return @"front";
+  }
+  if (device.position == AVCaptureDevicePositionBack) {
+    return @"back";
+  }
+  return @"unknown";
+}
+
+static NSString *B2NativeSpikeSessionId(AVCaptureSession *session) {
+  return [NSString stringWithFormat:@"ios:%p", session];
+}
+
+static void B2NativeSpikeEmitAppliedEvent(
+  NSString *event,
+  NSString *eventDetail,
+  AVCaptureDevice *device,
+  AVCaptureSession *session,
+  BOOL incrementSetup,
+  BOOL incrementBind
+) {
+  NSDictionary *context = B2NativeSpikeContextSnapshot();
+  if (context == nil) {
+    return;
+  }
+  NSDictionary *counters = B2NativeSpikeCountersSnapshot(incrementSetup, incrementBind);
+  B2NativeSpikeEmit(context, event, @{
+    @"eventDetail": eventDetail ?: [NSNull null],
+    @"lens": B2NativeSpikeActualLens(device),
+    @"nativeSessionId": B2NativeSpikeSessionId(session),
+    @"nativeApplied": @YES,
+    @"counters": counters,
+  });
+}
+
 @implementation SingleCameraPreview {
   dispatch_queue_t _dispatchQueue;
+  BOOL _b2NativeHasStarted;
 }
 
 - (instancetype)initWithCameraSensor:(PigeonSensorPosition)sensor
@@ -72,6 +119,31 @@
   }
   
   [self setBestPreviewQuality];
+
+  BOOL initialInputApplied = _captureDevice != nil &&
+    _captureVideoInput != nil &&
+    [_captureSession.inputs containsObject:_captureVideoInput] &&
+    _captureConnection != nil &&
+    [_captureSession.connections containsObject:_captureConnection];
+  if (initialInputApplied) {
+    NSString *b2Lens = B2NativeSpikeActualLens(_captureDevice);
+    NSString *b2SessionId = B2NativeSpikeSessionId(_captureSession);
+    [_imageStreamController b2ConfigureProducerLens:b2Lens nativeSessionId:b2SessionId];
+    B2NativeSpikeEmitAppliedEvent(
+      @"native_setup",
+      @"input_configured",
+      _captureDevice,
+      _captureSession,
+      YES,
+      NO);
+    B2NativeSpikeEmitAppliedEvent(
+      @"native_bind",
+      @"input_committed",
+      _captureDevice,
+      _captureSession,
+      NO,
+      YES);
+  }
   
   return self;
 }
@@ -286,21 +358,89 @@
 /// Start camera preview
 - (void)start {
   dispatch_async(_dispatchQueue, ^{
+    NSDictionary *context = B2NativeSpikeContextSnapshot();
+    BOOL isResume;
+    BOOL wasRunning = self->_captureSession.isRunning;
+    @synchronized (self) {
+      isResume = self->_b2NativeHasStarted && !wasRunning;
+    }
+    uint64_t resumeRequestUs = 0;
+    if (context != nil && isResume) {
+      resumeRequestUs = B2NativeSpikeMonotonicUs();
+      NSInteger revision = [context[@"contextRevision"] integerValue];
+      [self->_imageStreamController b2MarkResumeAtMonotonicUs:resumeRequestUs contextRevision:revision];
+      B2NativeSpikeEmit(context, @"lifecycle", @{
+        @"eventDetail": @"resume_requested",
+        @"lens": B2NativeSpikeActualLens(self->_captureDevice),
+        @"nativeSessionId": B2NativeSpikeSessionId(self->_captureSession),
+        @"nativeApplied": @NO,
+        @"monotonicUs": @(resumeRequestUs),
+      });
+    }
     [self->_captureSession startRunning];
+    if (self->_captureSession.isRunning) {
+      @synchronized (self) {
+        self->_b2NativeHasStarted = YES;
+      }
+      if (context != nil && isResume) {
+        B2NativeSpikeEmit(context, @"lifecycle", @{
+          @"eventDetail": @"resume_applied",
+          @"lens": B2NativeSpikeActualLens(self->_captureDevice),
+          @"nativeSessionId": B2NativeSpikeSessionId(self->_captureSession),
+          @"nativeApplied": @YES,
+        });
+      }
+      B2NativeSpikeEmitAppliedEvent(
+        @"native_start",
+        isResume ? @"resume_applied" : @"initial_start_applied",
+        self->_captureDevice,
+        self->_captureSession,
+        NO,
+        NO);
+    }
   });
 }
 
 /// Stop camera preview
 - (void)stop {
+  BOOL wasRunning = _captureSession.isRunning;
   [_captureSession stopRunning];
+  if (wasRunning) {
+    NSDictionary *context = B2NativeSpikeContextSnapshot();
+    if (context != nil) {
+      B2NativeSpikeEmit(context, @"lifecycle", @{
+        @"eventDetail": @"pause",
+        @"lens": B2NativeSpikeActualLens(_captureDevice),
+        @"nativeSessionId": B2NativeSpikeSessionId(_captureSession),
+        @"nativeApplied": @YES,
+      });
+    }
+    B2NativeSpikeEmitAppliedEvent(
+      @"native_stop",
+      @"stop_applied",
+      _captureDevice,
+      _captureSession,
+      NO,
+      NO);
+  }
 }
 
 /// Set sensor between Front & Rear camera
 - (void)setSensor:(PigeonSensor *)sensor {
   // Check if the session is running before changing the preset
   BOOL sessionIsRunning = _captureSession.isRunning;
+  AVCaptureDevice *previousDevice = _captureDevice;
   if (sessionIsRunning) {
       [_captureSession stopRunning];
+      if (!_captureSession.isRunning) {
+        B2NativeSpikeEmitAppliedEvent(
+          @"native_stop",
+          @"sensor_switch_stop_applied",
+          previousDevice,
+          _captureSession,
+          NO,
+          NO);
+      }
   }
   // First remove all input & output
   [_captureSession beginConfiguration];
@@ -338,9 +478,43 @@
   [self setBestPreviewQuality];
   
   [_captureSession commitConfiguration];
+
+  BOOL inputApplied = _captureDevice != nil &&
+    _captureVideoInput != nil &&
+    [_captureSession.inputs containsObject:_captureVideoInput] &&
+    _captureConnection != nil &&
+    [_captureSession.connections containsObject:_captureConnection];
+  if (inputApplied) {
+    NSString *b2Lens = B2NativeSpikeActualLens(_captureDevice);
+    NSString *b2SessionId = B2NativeSpikeSessionId(_captureSession);
+    [_imageStreamController b2ConfigureProducerLens:b2Lens nativeSessionId:b2SessionId];
+    B2NativeSpikeEmitAppliedEvent(
+      @"native_bind",
+      @"sensor_switch_committed",
+      _captureDevice,
+      _captureSession,
+      NO,
+      YES);
+    B2NativeSpikeEmitAppliedEvent(
+      @"lens_switch",
+      @"applied",
+      _captureDevice,
+      _captureSession,
+      NO,
+      NO);
+  }
   if (sessionIsRunning) {
     dispatch_async(_dispatchQueue, ^{
       [self->_captureSession startRunning];
+      if (self->_captureSession.isRunning) {
+        B2NativeSpikeEmitAppliedEvent(
+          @"native_start",
+          @"sensor_switch_start_applied",
+          self->_captureDevice,
+          self->_captureSession,
+          NO,
+          NO);
+      }
     });
   }
 }
@@ -647,7 +821,8 @@
 
     // Send to image stream controller if enabled
     if (_imageStreamController.streamImages) {
-        [_imageStreamController captureOutput:output didOutputSampleBuffer:sampleBuffer fromConnection:connection orientation:_motionController.deviceOrientation];
+        UIDeviceOrientation callbackOrientation = _motionController.deviceOrientation;
+        [_imageStreamController captureOutput:output didOutputSampleBuffer:sampleBuffer fromConnection:connection orientation:callbackOrientation];
     }
 
     // Send to video recording controller if recording

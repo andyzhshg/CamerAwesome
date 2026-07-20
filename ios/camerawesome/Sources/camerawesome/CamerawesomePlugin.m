@@ -8,17 +8,115 @@
 #import "CaptureModeUtils.h"
 #import "FlashModeUtils.h"
 #import "AnalysisController.h"
+#import <mach/mach_time.h>
 
 FlutterEventSink orientationEventSink;
 FlutterEventSink videoRecordingEventSink;
 FlutterEventSink imageStreamEventSink;
 FlutterEventSink physicalButtonEventSink;
 
+static dispatch_queue_t B2NativeSpikeStateQueue;
+static NSDictionary *B2NativeSpikeContext;
+static NSInteger B2NativeSpikeSetupCount = 0;
+static NSInteger B2NativeSpikeBindCount = 0;
+
+static id B2NativeSpikeJSONValue(id value) {
+  return value == nil ? [NSNull null] : value;
+}
+
+uint64_t B2NativeSpikeMonotonicUs(void) {
+  static mach_timebase_info_data_t timebase;
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    mach_timebase_info(&timebase);
+  });
+  __uint128_t nanos = (__uint128_t)mach_continuous_time() * timebase.numer / timebase.denom;
+  return (uint64_t)(nanos / 1000);
+}
+
+NSDictionary *B2NativeSpikeContextSnapshot(void) {
+  if (B2NativeSpikeStateQueue == nil) {
+    return nil;
+  }
+  __block NSDictionary *snapshot = nil;
+  dispatch_sync(B2NativeSpikeStateQueue, ^{
+    snapshot = B2NativeSpikeContext;
+  });
+  return snapshot;
+}
+
+NSDictionary *B2NativeSpikeCountersSnapshot(BOOL incrementSetup, BOOL incrementBind) {
+  if (B2NativeSpikeStateQueue == nil) {
+    return @{ @"setupCount": @0, @"bindCount": @0 };
+  }
+  __block NSDictionary *snapshot;
+  dispatch_sync(B2NativeSpikeStateQueue, ^{
+    if (incrementSetup) {
+      B2NativeSpikeSetupCount += 1;
+    }
+    if (incrementBind) {
+      B2NativeSpikeBindCount += 1;
+    }
+    snapshot = @{
+      @"setupCount": @(B2NativeSpikeSetupCount),
+      @"bindCount": @(B2NativeSpikeBindCount),
+    };
+  });
+  return snapshot;
+}
+
+void B2NativeSpikeEmit(NSDictionary *contextSnapshot, NSString *event, NSDictionary *fields) {
+  if (contextSnapshot == nil) {
+    return;
+  }
+
+  NSDictionary *counters = fields[@"counters"] ?: B2NativeSpikeCountersSnapshot(NO, NO);
+  NSDictionary *record = @{
+    @"schemaVersion": @2,
+    @"runId": B2NativeSpikeJSONValue(contextSnapshot[@"runId"]),
+    @"scenarioId": B2NativeSpikeJSONValue(contextSnapshot[@"scenarioId"]),
+    @"contextRevision": B2NativeSpikeJSONValue(contextSnapshot[@"contextRevision"]),
+    @"platform": @"ios",
+    @"deviceClass": B2NativeSpikeJSONValue(contextSnapshot[@"deviceClass"]),
+    @"osVersion": B2NativeSpikeJSONValue(contextSnapshot[@"osVersion"]),
+    @"expectedLens": B2NativeSpikeJSONValue(contextSnapshot[@"expectedLens"]),
+    @"lens": B2NativeSpikeJSONValue(fields[@"lens"]),
+    @"event": B2NativeSpikeJSONValue(event),
+    @"eventDetail": B2NativeSpikeJSONValue(fields[@"eventDetail"]),
+    @"clockDomain": @"ios_monotonic",
+    @"monotonicUs": B2NativeSpikeJSONValue(fields[@"monotonicUs"] ?: @(B2NativeSpikeMonotonicUs())),
+    @"dartCameraContextId": [NSNull null],
+    @"dartSessionId": [NSNull null],
+    @"nativeSessionId": B2NativeSpikeJSONValue(fields[@"nativeSessionId"]),
+    @"nativeApplied": B2NativeSpikeJSONValue(fields[@"nativeApplied"]),
+    @"previewFit": [NSNull null],
+    @"previewDisplayScale": [NSNull null],
+    @"viewportLogicalPx": [NSNull null],
+    @"analysisPreview": [NSNull null],
+    @"analysisImage": B2NativeSpikeJSONValue(fields[@"analysisImage"]),
+    @"setupCount": B2NativeSpikeJSONValue(counters[@"setupCount"]),
+    @"bindCount": B2NativeSpikeJSONValue(counters[@"bindCount"]),
+    @"frameGapMs": B2NativeSpikeJSONValue(fields[@"frameGapMs"]),
+    @"resumeToFirstFrameMs": B2NativeSpikeJSONValue(fields[@"resumeToFirstFrameMs"]),
+    @"blackFrameObserved": [NSNull null],
+  };
+
+  NSError *error = nil;
+  NSData *jsonData = [NSJSONSerialization dataWithJSONObject:record options:0 error:&error];
+  if (jsonData == nil || error != nil) {
+    NSLog(@"[B2_NATIVE_SPIKE_ERROR] %@", error.localizedDescription ?: @"JSON serialization failed");
+    return;
+  }
+  NSString *json = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+  NSLog(@"[B2_NATIVE_SPIKE] %@", json);
+}
+
 @interface CamerawesomePlugin () <CameraInterface, AnalysisImageUtils>
 @property(readonly, nonatomic) NSObject<FlutterTextureRegistry> *textureRegistry;
 @property NSMutableArray<NSNumber *> *texturesIds;
 @property SingleCameraPreview *camera;
 @property MultiCameraPreview *multiCamera;
+@property(nonatomic, strong) FlutterMethodChannel *b2NativeSpikeChannel;
 - (instancetype)init:(NSObject<FlutterPluginRegistrar>*)registrar;
 @end
 
@@ -43,6 +141,11 @@ FlutterEventSink physicalButtonEventSink;
   if (_dispatchQueueAnalysis == nil) {
     _dispatchQueueAnalysis = dispatch_queue_create("camerawesome.dispatchqueue.analysis", NULL);
   }
+
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    B2NativeSpikeStateQueue = dispatch_queue_create("camerawesome.b2_native_spike.state", DISPATCH_QUEUE_SERIAL);
+  });
   
   return self;
 }
@@ -58,6 +161,83 @@ FlutterEventSink physicalButtonEventSink;
   [orientationChannel setStreamHandler:instance];
   [imageStreamChannel setStreamHandler:instance];
   [physicalButtonChannel setStreamHandler:instance];
+
+  instance.b2NativeSpikeChannel = [FlutterMethodChannel
+    methodChannelWithName:@"daily_cam/b2_native_spike"
+    binaryMessenger:[registrar messenger]];
+  [instance.b2NativeSpikeChannel setMethodCallHandler:^(FlutterMethodCall *call, FlutterResult result) {
+    if (![call.method isEqualToString:@"setContext"]) {
+      result(FlutterMethodNotImplemented);
+      return;
+    }
+
+    if (![call.arguments isKindOfClass:[NSDictionary class]]) {
+      result([FlutterError errorWithCode:@"invalid_context"
+                                 message:@"setContext requires a map"
+                                 details:nil]);
+      return;
+    }
+
+    NSDictionary *arguments = (NSDictionary *)call.arguments;
+    NSArray<NSString *> *stringKeys = @[
+      @"runId", @"scenarioId", @"deviceClass", @"osVersion", @"expectedLens"
+    ];
+    for (NSString *key in stringKeys) {
+      id value = arguments[key];
+      if (![value isKindOfClass:[NSString class]] || [(NSString *)value length] == 0) {
+        result([FlutterError errorWithCode:@"invalid_context"
+                                   message:[NSString stringWithFormat:@"%@ must be a non-empty string", key]
+                                   details:nil]);
+        return;
+      }
+    }
+    id revisionValue = arguments[@"contextRevision"];
+    if (![revisionValue isKindOfClass:[NSNumber class]] || [revisionValue integerValue] < 1) {
+      result([FlutterError errorWithCode:@"invalid_context"
+                                 message:@"contextRevision must be a positive integer"
+                                 details:nil]);
+      return;
+    }
+
+    NSDictionary *published = @{
+      @"runId": arguments[@"runId"],
+      @"scenarioId": arguments[@"scenarioId"],
+      @"deviceClass": arguments[@"deviceClass"],
+      @"osVersion": arguments[@"osVersion"],
+      @"expectedLens": arguments[@"expectedLens"],
+      @"contextRevision": @([revisionValue integerValue]),
+    };
+    __block FlutterError *publishError = nil;
+    dispatch_sync(B2NativeSpikeStateQueue, ^{
+      NSString *previousRunId = B2NativeSpikeContext[@"runId"];
+      NSInteger previousRevision = [B2NativeSpikeContext[@"contextRevision"] integerValue];
+      BOOL sameRun = previousRunId != nil && [previousRunId isEqualToString:published[@"runId"]];
+      NSInteger nextRevision = [published[@"contextRevision"] integerValue];
+      if (!sameRun && nextRevision != 1) {
+        publishError = [FlutterError errorWithCode:@"invalid_context_revision"
+                                           message:@"the first contextRevision in a run must be 1"
+                                           details:nil];
+        return;
+      }
+      if (sameRun && nextRevision != previousRevision + 1) {
+        publishError = [FlutterError errorWithCode:@"invalid_context_revision"
+                                           message:@"contextRevision must increase by exactly one within a run"
+                                           details:nil];
+        return;
+      }
+      if (!sameRun) {
+        B2NativeSpikeSetupCount = 0;
+        B2NativeSpikeBindCount = 0;
+      }
+      B2NativeSpikeContext = [published copy];
+    });
+    if (publishError != nil) {
+      result(publishError);
+      return;
+    }
+
+    result(@{ @"contextRevision": published[@"contextRevision"] });
+  }];
   
   CameraInterfaceSetup(registrar.messenger, instance);
   AnalysisImageUtilsSetup(registrar.messenger, instance);

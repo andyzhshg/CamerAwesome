@@ -38,6 +38,7 @@ import io.flutter.embedding.engine.plugins.FlutterPlugin.FlutterPluginBinding
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.EventChannel
+import io.flutter.plugin.common.MethodChannel
 import io.flutter.view.TextureRegistry
 import io.reactivex.rxjava3.disposables.Disposable
 import io.reactivex.rxjava3.subjects.BehaviorSubject
@@ -45,13 +46,319 @@ import kotlinx.coroutines.*
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlin.math.roundToInt
+import org.json.JSONObject
 
 
 enum class CaptureModes {
     PHOTO, VIDEO, PREVIEW, ANALYSIS_ONLY,
+}
+
+internal class B2NativeSpikeRunState {
+    val setupCount = AtomicInteger(0)
+    val bindCount = AtomicInteger(0)
+    val frameSequence = AtomicLong(0)
+    val lastFrameUs = AtomicLong(-1)
+    val sampledScenarioRevisions = ConcurrentHashMap.newKeySet<String>()
+    val paused = AtomicBoolean(false)
+    val resumeStartedUs = AtomicLong(-1)
+}
+
+internal data class B2NativeSpikeContext(
+    val runId: String,
+    val scenarioId: String,
+    val deviceClass: String,
+    val osVersion: String,
+    val expectedLens: String,
+    val contextRevision: Int,
+    val runState: B2NativeSpikeRunState,
+)
+
+internal object B2NativeSpikeTelemetry {
+    const val CHANNEL_NAME = "daily_cam/b2_native_spike"
+    const val METHOD_SET_CONTEXT = "setContext"
+    private const val LOG_TAG = "B2NativeSpike"
+    private const val LOG_PREFIX = "[B2_NATIVE_SPIKE] "
+    private val contextReference = AtomicReference<B2NativeSpikeContext?>(null)
+
+    fun snapshot(): B2NativeSpikeContext? = contextReference.get()
+
+    @Synchronized
+    fun setContext(arguments: Any?): Int {
+        val map = arguments as? Map<*, *>
+            ?: throw IllegalArgumentException("setContext requires a context map")
+        val runId = requiredString(map, "runId")
+        val scenarioId = requiredString(map, "scenarioId")
+        val deviceClass = requiredString(map, "deviceClass")
+        val osVersion = requiredString(map, "osVersion")
+        val expectedLens = requiredString(map, "expectedLens")
+        val revision = (map["contextRevision"] as? Number)?.toInt()
+            ?: throw IllegalArgumentException("contextRevision must be an int")
+        require(deviceClass == "phone" || deviceClass == "large") {
+            "deviceClass must be phone or large"
+        }
+        require(expectedLens == "front" || expectedLens == "back") {
+            "expectedLens must be front or back"
+        }
+
+        val current = contextReference.get()
+        val runState = if (current == null || current.runId != runId) {
+            require(revision == 1) { "a new run must start at contextRevision 1" }
+            B2NativeSpikeRunState()
+        } else {
+            require(revision == current.contextRevision + 1) {
+                "contextRevision must increase by exactly one"
+            }
+            require(deviceClass == current.deviceClass && osVersion == current.osVersion) {
+                "run identity cannot change within a run"
+            }
+            current.runState
+        }
+
+        contextReference.set(
+            B2NativeSpikeContext(
+                runId = runId,
+                scenarioId = scenarioId,
+                deviceClass = deviceClass,
+                osVersion = osVersion,
+                expectedLens = expectedLens,
+                contextRevision = revision,
+                runState = runState,
+            )
+        )
+        return revision
+    }
+
+    fun clearContext() {
+        contextReference.set(null)
+    }
+
+    fun emit(
+        context: B2NativeSpikeContext?,
+        event: String,
+        eventDetail: String? = null,
+        nativeSessionId: String? = null,
+        lens: String? = null,
+        nativeApplied: Boolean? = null,
+        analysisImage: Map<String, Any?>? = null,
+        frameGapMs: Double? = null,
+        resumeToFirstFrameMs: Double? = null,
+        monotonicUs: Long = elapsedRealtimeUs(),
+    ) {
+        if (context == null) return
+        val state = context.runState
+        val values = linkedMapOf<String, Any?>(
+            "schemaVersion" to 2,
+            "runId" to context.runId,
+            "scenarioId" to context.scenarioId,
+            "contextRevision" to context.contextRevision,
+            "platform" to "android",
+            "deviceClass" to context.deviceClass,
+            "osVersion" to context.osVersion,
+            "expectedLens" to context.expectedLens,
+            "lens" to lens,
+            "event" to event,
+            "eventDetail" to eventDetail,
+            "clockDomain" to "android_elapsed_realtime",
+            "monotonicUs" to monotonicUs,
+            "dartCameraContextId" to null,
+            "dartSessionId" to null,
+            "nativeSessionId" to nativeSessionId,
+            "nativeApplied" to nativeApplied,
+            "previewFit" to null,
+            "previewDisplayScale" to null,
+            "viewportLogicalPx" to null,
+            "analysisPreview" to null,
+            "analysisImage" to analysisImage,
+            "setupCount" to state.setupCount.get(),
+            "bindCount" to state.bindCount.get(),
+            "frameGapMs" to frameGapMs,
+            "resumeToFirstFrameMs" to resumeToFirstFrameMs,
+            "blackFrameObserved" to null,
+        )
+        Log.i(LOG_TAG, LOG_PREFIX + jsonObject(values).toString())
+    }
+
+    fun recordSetupApplied(
+        context: B2NativeSpikeContext?,
+        nativeSessionId: String?,
+    ) {
+        if (context == null) return
+        context.runState.setupCount.incrementAndGet()
+        emit(
+            context = context,
+            event = "native_setup",
+            eventDetail = "camera_state_committed",
+            nativeSessionId = nativeSessionId,
+            lens = null,
+            nativeApplied = true,
+        )
+    }
+
+    fun recordBindApplied(
+        context: B2NativeSpikeContext?,
+        nativeSessionId: String?,
+        lens: String?,
+    ) {
+        if (context == null) return
+        context.runState.bindCount.incrementAndGet()
+        emit(
+            context = context,
+            event = "native_bind",
+            eventDetail = "bind_to_lifecycle_committed",
+            nativeSessionId = nativeSessionId,
+            lens = lens,
+            nativeApplied = true,
+        )
+        emit(
+            context = context,
+            event = "native_start",
+            eventDetail = "bound_lifecycle_started",
+            nativeSessionId = nativeSessionId,
+            lens = lens,
+            nativeApplied = true,
+        )
+    }
+
+    fun recordPause(
+        context: B2NativeSpikeContext?,
+        nativeSessionId: String?,
+        lens: String?,
+    ) {
+        if (context == null) return
+        context.runState.paused.set(true)
+        emit(
+            context = context,
+            event = "lifecycle",
+            eventDetail = "pause",
+            nativeSessionId = nativeSessionId,
+            lens = lens,
+            nativeApplied = false,
+        )
+    }
+
+    fun recordResume(
+        context: B2NativeSpikeContext?,
+        nativeSessionId: String?,
+        lens: String?,
+    ) {
+        if (context == null || !context.runState.paused.compareAndSet(true, false)) return
+        val nowUs = elapsedRealtimeUs()
+        context.runState.resumeStartedUs.set(nowUs)
+        emit(
+            context = context,
+            event = "lifecycle",
+            eventDetail = "resume",
+            nativeSessionId = nativeSessionId,
+            lens = lens,
+            nativeApplied = false,
+            monotonicUs = nowUs,
+        )
+    }
+
+    fun recordAnalysisFrame(
+        context: B2NativeSpikeContext?,
+        nativeSessionId: String?,
+        lens: String?,
+        latestNativeOrientation: String,
+        format: String,
+        width: Int,
+        height: Int,
+        cropLeft: Int?,
+        cropTop: Int?,
+        cropRight: Int?,
+        cropBottom: Int?,
+        callbackRotationDegrees: Int,
+        samplePtsUs: Long,
+    ) {
+        if (context == null) return
+        val state = context.runState
+        val nowUs = elapsedRealtimeUs()
+        val sequence = state.frameSequence.incrementAndGet()
+        val previousUs = state.lastFrameUs.getAndSet(nowUs)
+        val frameGapMs = if (previousUs >= 0) (nowUs - previousUs) / 1000.0 else null
+        val scenarioKey = "${context.runId}:${context.contextRevision}"
+        val isScenarioFirst = state.sampledScenarioRevisions.add(scenarioKey)
+        val resumeStartedUs = state.resumeStartedUs.getAndSet(-1)
+        val isResumeFirst = resumeStartedUs >= 0
+        val isPeriodic = sequence % 30L == 0L
+        val isGap = frameGapMs != null && frameGapMs > 1000.0
+        if (!isScenarioFirst && !isResumeFirst && !isPeriodic && !isGap) return
+
+        val analysisImage = linkedMapOf<String, Any?>(
+            "format" to format,
+            "width" to width,
+            "height" to height,
+            "sourceWidth" to width,
+            "sourceHeight" to height,
+            "cropLeft" to cropLeft,
+            "cropTop" to cropTop,
+            "cropRight" to cropRight,
+            "cropBottom" to cropBottom,
+            "rotation" to "rotation${callbackRotationDegrees}deg",
+            "frameSequence" to sequence,
+            "samplePtsUs" to samplePtsUs,
+            "latestNativeOrientation" to latestNativeOrientation,
+            "callbackRawOrientation" to null,
+            "callbackRotationDegrees" to callbackRotationDegrees,
+            "softwareRotated" to false,
+        )
+        emit(
+            context = context,
+            event = "analysis_frame",
+            eventDetail = when {
+                isResumeFirst -> "post_resume_first"
+                isScenarioFirst -> "scenario_first"
+                isGap -> "gap_over_1000ms"
+                else -> "periodic_30"
+            },
+            nativeSessionId = nativeSessionId,
+            lens = lens,
+            nativeApplied = true,
+            analysisImage = analysisImage,
+            frameGapMs = frameGapMs,
+            resumeToFirstFrameMs = if (isResumeFirst) {
+                (nowUs - resumeStartedUs) / 1000.0
+            } else {
+                null
+            },
+            monotonicUs = nowUs,
+        )
+    }
+
+    private fun requiredString(map: Map<*, *>, key: String): String {
+        val value = map[key] as? String
+        require(!value.isNullOrBlank()) { "$key must be a non-empty string" }
+        return value
+    }
+
+    private fun elapsedRealtimeUs(): Long = SystemClock.elapsedRealtimeNanos() / 1000L
+
+    private fun jsonObject(values: Map<String, Any?>): JSONObject {
+        val result = JSONObject()
+        for ((key, value) in values) {
+            result.put(
+                key,
+                when (value) {
+                    null -> JSONObject.NULL
+                    is Map<*, *> -> jsonObject(
+                        value.entries.associate { (nestedKey, nestedValue) ->
+                            nestedKey.toString() to nestedValue
+                        }
+                    )
+                    else -> value
+                }
+            )
+        }
+        return result
+    }
 }
 
 class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
@@ -61,6 +368,7 @@ class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
     private var activity: Activity? = null
     private lateinit var imageStreamChannel: EventChannel
     private lateinit var orientationStreamChannel: EventChannel
+    private var nativeSpikeChannel: MethodChannel? = null
     private var orientationStreamListener: OrientationStreamListener? = null
     private val sensorOrientationListener: SensorOrientationListener = SensorOrientationListener()
 
@@ -131,6 +439,13 @@ class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
         videoOptions: VideoOptions?,
         callback: (Result<Boolean>) -> Unit
     ) {
+        val spikeContext = B2NativeSpikeTelemetry.snapshot()
+        B2NativeSpikeTelemetry.emit(
+            context = spikeContext,
+            event = "native_setup",
+            eventDetail = "setup_camera_request",
+            nativeApplied = false,
+        )
         if (enablePhysicalButton) {
             val serviceIntent = Intent(activity!!, PlayerService::class.java)
             serviceIntent.putExtra(
@@ -161,6 +476,10 @@ class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
             this.flashMode = FlashMode.valueOf(flashMode)
             this.enableAudioRecording = videoOptions?.enableAudio ?: true
         }
+        B2NativeSpikeTelemetry.recordSetupApplied(
+            context = spikeContext,
+            nativeSessionId = cameraState.nativeSessionIdForSpike(),
+        )
         this.exifPreferences = exifPreferences
         orientationStreamListener =
             OrientationStreamListener(activity!!, listOf(sensorOrientationListener, cameraState))
@@ -187,6 +506,16 @@ class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
         format: String, width: Long, maxFramesPerSecond: Double?, autoStart: Boolean
     ) {
         cameraState.apply {
+            val state = this
+            val spikeContext = B2NativeSpikeTelemetry.snapshot()
+            B2NativeSpikeTelemetry.emit(
+                context = spikeContext,
+                event = "native_setup",
+                eventDetail = "analysis_stream_config_request",
+                nativeSessionId = state.nativeSessionIdForSpike(),
+                lens = state.actualLensForSpike(),
+                nativeApplied = false,
+            )
             try {
                 imageAnalysisBuilder = ImageAnalysisBuilder.configure(
                     aspectRatio ?: AspectRatio.RATIO_4_3,
@@ -199,6 +528,9 @@ class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
                     },
                     executor(activity!!), width,
                     maxFramesPerSecond = maxFramesPerSecond,
+                    nativeSessionIdProvider = state::nativeSessionIdForSpike,
+                    actualLensProvider = state::actualLensForSpike,
+                    latestNativeOrientationProvider = state::latestNativeOrientationForSpike,
                 )
                 enableImageStream = autoStart
                 updateLifecycle(activity!!)
@@ -569,10 +901,24 @@ class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
 
     override fun start(): Boolean {
         // Already started on setUp
+        currentCameraStateOrNull()?.let { state ->
+            B2NativeSpikeTelemetry.recordResume(
+                context = B2NativeSpikeTelemetry.snapshot(),
+                nativeSessionId = state.nativeSessionIdForSpike(),
+                lens = state.actualLensForSpike(),
+            )
+        }
         return true
     }
 
     override fun stop(): Boolean {
+        currentCameraStateOrNull()?.let { state ->
+            B2NativeSpikeTelemetry.recordPause(
+                context = B2NativeSpikeTelemetry.snapshot(),
+                nativeSessionId = state.nativeSessionIdForSpike(),
+                lens = state.actualLensForSpike(),
+            )
+        }
         orientationStreamListener?.stop()
         cameraState.stop()
         return true
@@ -606,6 +952,16 @@ class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
     @SuppressLint("RestrictedApi")
     override fun setSensor(sensors: List<PigeonSensor>) {
         cameraState.apply {
+            val spikeContext = B2NativeSpikeTelemetry.snapshot()
+            val previousLens = actualLensForSpike()
+            B2NativeSpikeTelemetry.emit(
+                context = spikeContext,
+                event = "lens_switch",
+                eventDetail = "set_sensor_request",
+                nativeSessionId = nativeSessionIdForSpike(),
+                lens = previousLens,
+                nativeApplied = false,
+            )
             this.sensors = sensors
             // TODO Make below variables parameters
             // Also reset flash mode and aspect ratio
@@ -613,6 +969,14 @@ class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
             this.aspectRatio = null
             this.rational = Rational(3, 4)
             updateLifecycle(activity!!)
+            B2NativeSpikeTelemetry.emit(
+                context = spikeContext,
+                event = "lens_switch",
+                eventDetail = "set_sensor_committed",
+                nativeSessionId = nativeSessionIdForSpike(),
+                lens = actualLensForSpike(),
+                nativeApplied = true,
+            )
         }
     }
 
@@ -810,9 +1174,33 @@ class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
         EventChannel(binding.binaryMessenger, "camerawesome/physical_button").setStreamHandler(
             physicalButtonHandler
         )
+        nativeSpikeChannel = MethodChannel(
+            binding.binaryMessenger,
+            B2NativeSpikeTelemetry.CHANNEL_NAME,
+        ).also { channel ->
+            channel.setMethodCallHandler { call, result ->
+                if (call.method != B2NativeSpikeTelemetry.METHOD_SET_CONTEXT) {
+                    result.notImplemented()
+                    return@setMethodCallHandler
+                }
+                try {
+                    val revision = B2NativeSpikeTelemetry.setContext(call.arguments)
+                    result.success(mapOf("contextRevision" to revision))
+                } catch (error: IllegalArgumentException) {
+                    result.error(
+                        "B2_NATIVE_SPIKE_INVALID_CONTEXT",
+                        error.message,
+                        null,
+                    )
+                }
+            }
+        }
     }
 
     override fun onDetachedFromEngine(binding: FlutterPluginBinding) {
+        nativeSpikeChannel?.setMethodCallHandler(null)
+        nativeSpikeChannel = null
+        B2NativeSpikeTelemetry.clearContext()
         this.binding = null
     }
 
@@ -835,6 +1223,10 @@ class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
         activity = null
         cancellationTokenSource.cancel()
         cameraPermissions.onCancel(null)
+    }
+
+    private fun currentCameraStateOrNull(): CameraXState? {
+        return if (::cameraState.isInitialized) cameraState else null
     }
 
 }

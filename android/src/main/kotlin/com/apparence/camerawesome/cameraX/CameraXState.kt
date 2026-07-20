@@ -25,6 +25,7 @@ import com.apparence.camerawesome.utils.isMultiCamSupported
 import io.flutter.plugin.common.EventChannel
 import io.flutter.view.TextureRegistry
 import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicReference
 
 /// Hold the settings of the camera and use cases in this class and
 /// call updateLifecycle() to refresh the state
@@ -56,6 +57,8 @@ data class CameraXState(
 
     var imageAnalysisBuilder: ImageAnalysisBuilder? = null
     private var imageAnalysis: ImageAnalysis? = null
+    private val boundLensForSpike = AtomicReference<String?>(null)
+    private val latestNativeOrientationValueForSpike = AtomicReference("unknown")
 
     private val mainCameraInfos: CameraInfo
         @SuppressLint("RestrictedApi") get() {
@@ -91,6 +94,15 @@ data class CameraXState(
 
     @SuppressLint("RestrictedApi", "UnsafeOptInUsageError")
     fun updateLifecycle(activity: Activity) {
+        val spikeContext = B2NativeSpikeTelemetry.snapshot()
+        B2NativeSpikeTelemetry.emit(
+            context = spikeContext,
+            event = "native_bind",
+            eventDetail = "update_lifecycle_request",
+            nativeSessionId = nativeSessionIdForSpike(),
+            lens = actualLensForSpike(),
+            nativeApplied = false,
+        )
         previews = mutableListOf()
         imageCaptures.clear()
         videoCaptures.clear()
@@ -190,6 +202,7 @@ data class CameraXState(
             )
             // Only set flash to the main camera (the first one)
             concurrentCamera!!.cameras.first().cameraControl.enableTorch(flashMode == FlashMode.ALWAYS)
+            recordSuccessfulBindForSpike(spikeContext)
         } else {
             val useCaseGroupBuilder = UseCaseGroup.Builder()
             // Handle single camera
@@ -268,6 +281,7 @@ data class CameraXState(
                 useCaseGroupBuilder.build(),
             )
             previewCamera!!.cameraControl.enableTorch(flashMode == FlashMode.ALWAYS)
+            recordSuccessfulBindForSpike(spikeContext)
         }
     }
 
@@ -422,7 +436,18 @@ data class CameraXState(
     }
 
     fun stop() {
+        val spikeContext = B2NativeSpikeTelemetry.snapshot()
+        val appliedLens = actualLensForSpike()
         cameraProvider.unbindAll()
+        boundLensForSpike.set(null)
+        B2NativeSpikeTelemetry.emit(
+            context = spikeContext,
+            event = "native_stop",
+            eventDetail = "unbind_all_committed",
+            nativeSessionId = nativeSessionIdForSpike(),
+            lens = appliedLens,
+            nativeApplied = true,
+        )
     }
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
@@ -439,6 +464,15 @@ data class CameraXState(
     }
 
     override fun onOrientationChanged(orientation: Int) {
+        latestNativeOrientationValueForSpike.set(
+            when (orientation) {
+                0 -> "portraitUp"
+                90 -> "landscapeLeft"
+                180 -> "portraitDown"
+                270 -> "landscapeRight"
+                else -> "unknown"
+            }
+        )
         imageAnalysis?.targetRotation = when (orientation) {
             in 225 until 315 -> {
                 Surface.ROTATION_90
@@ -466,6 +500,28 @@ data class CameraXState(
             "RATIO_1_1" -> Rational(1, 1)
             else -> Rational(3, 4)
         }
+    }
+
+    internal fun nativeSessionIdForSpike(): String =
+        "android:${System.identityHashCode(this)}"
+
+    internal fun actualLensForSpike(): String? = boundLensForSpike.get()
+
+    internal fun latestNativeOrientationForSpike(): String =
+        latestNativeOrientationValueForSpike.get()
+
+    private fun recordSuccessfulBindForSpike(context: B2NativeSpikeContext?) {
+        val appliedLens = when (sensors.firstOrNull()?.position) {
+            PigeonSensorPosition.FRONT -> "front"
+            PigeonSensorPosition.BACK -> "back"
+            else -> null
+        }
+        boundLensForSpike.set(appliedLens)
+        B2NativeSpikeTelemetry.recordBindApplied(
+            context = context,
+            nativeSessionId = nativeSessionIdForSpike(),
+            lens = appliedLens,
+        )
     }
 
     @Suppress("DEPRECATION")

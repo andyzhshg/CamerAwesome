@@ -44,6 +44,7 @@ void main() {
             width: 400,
             height: 800,
             child: AnimatedPreviewFit(
+              key: const ValueKey('scale-1.0'),
               previewFit: CameraPreviewFit.contain,
               previewSize: PreviewSize(width: 960, height: 1280),
               constraints: const BoxConstraints(maxWidth: 400, maxHeight: 800),
@@ -61,6 +62,7 @@ void main() {
             width: 400,
             height: 800,
             child: AnimatedPreviewFit(
+              key: const ValueKey('scale-1.5'),
               previewFit: CameraPreviewFit.contain,
               previewSize: PreviewSize(width: 960, height: 1280),
               constraints: const BoxConstraints(maxWidth: 400, maxHeight: 800),
@@ -79,6 +81,54 @@ void main() {
         expect(emitted1!.previewSize, equals(emitted2!.previewSize));
         expect(emitted1!.offset, equals(emitted2!.offset));
         expect(emitted1!.scale, equals(emitted2!.scale));
+      },
+    );
+
+    testWidgets(
+      'scale-only update changes paint transform without recalculating analysis preview',
+      (tester) async {
+        final events = <String>[];
+        camerawesomeNativeSpikeDartEvent = (event, fields) {
+          events.add(event);
+        };
+        addTearDown(() => camerawesomeNativeSpikeDartEvent = null);
+
+        Widget subject(double displayScale) => MaterialApp(
+              home: SizedBox(
+                width: 400,
+                height: 800,
+                child: AnimatedPreviewFit(
+                  previewFit: CameraPreviewFit.contain,
+                  previewSize: PreviewSize(width: 960, height: 1280),
+                  constraints:
+                      const BoxConstraints(maxWidth: 400, maxHeight: 800),
+                  sensor: Sensor.position(SensorPosition.front),
+                  previewDisplayScale: displayScale,
+                  child: const ColoredBox(color: Colors.red),
+                ),
+              ),
+            );
+
+        await tester.pumpWidget(subject(1.0));
+        await tester.pumpAndSettle();
+        final initialCalculated =
+            events.where((event) => event == 'preview_calculated').length;
+
+        await tester.pumpWidget(subject(1.5));
+        await tester.pumpAndSettle();
+
+        final transform = tester.widget<Transform>(
+          find.byKey(const ValueKey('camerawesome-preview-display-scale')),
+        );
+        expect(transform.transform.storage[0], closeTo(1.5, 0.0001));
+        expect(
+          events.where((event) => event == 'preview_calculated').length,
+          initialCalculated,
+        );
+        expect(
+          events.where((event) => event == 'preview_fit_build').length,
+          greaterThanOrEqualTo(2),
+        );
       },
     );
   });
