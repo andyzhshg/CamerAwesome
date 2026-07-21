@@ -19,6 +19,10 @@ static dispatch_queue_t B2NativeSpikeStateQueue;
 static NSDictionary *B2NativeSpikeContext;
 static NSInteger B2NativeSpikeSetupCount = 0;
 static NSInteger B2NativeSpikeBindCount = 0;
+static FlutterMethodChannel *B2NativeSpikeChannel;
+static NSInteger B2NativeSpikePendingDeliveries = 0;
+static FlutterResult B2NativeSpikePendingFinish;
+static NSString *B2NativeSpikePendingFinishRunId;
 
 static id B2NativeSpikeJSONValue(id value) {
   return value == nil ? [NSNull null] : value;
@@ -101,14 +105,39 @@ void B2NativeSpikeEmit(NSDictionary *contextSnapshot, NSString *event, NSDiction
     @"blackFrameObserved": [NSNull null],
   };
 
-  NSError *error = nil;
-  NSData *jsonData = [NSJSONSerialization dataWithJSONObject:record options:0 error:&error];
-  if (jsonData == nil || error != nil) {
-    NSLog(@"[B2_NATIVE_SPIKE_ERROR] %@", error.localizedDescription ?: @"JSON serialization failed");
+  __block FlutterMethodChannel *channel = nil;
+  __block BOOL accepted = NO;
+  dispatch_sync(B2NativeSpikeStateQueue, ^{
+    NSString *activeRunId = B2NativeSpikeContext[@"runId"];
+    NSString *eventRunId = contextSnapshot[@"runId"];
+    channel = B2NativeSpikeChannel;
+    if (channel != nil && activeRunId != nil && [activeRunId isEqualToString:eventRunId]) {
+      B2NativeSpikePendingDeliveries += 1;
+      accepted = YES;
+    }
+  });
+  if (!accepted) {
     return;
   }
-  NSString *json = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
-  NSLog(@"[B2_NATIVE_SPIKE] %@", json);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [channel invokeMethod:@"nativeEvent" arguments:record result:^(__unused id reply) {
+      __block FlutterResult finish = nil;
+      __block NSString *finishRunId = nil;
+      dispatch_sync(B2NativeSpikeStateQueue, ^{
+        B2NativeSpikePendingDeliveries -= 1;
+        NSCAssert(B2NativeSpikePendingDeliveries >= 0, @"native spike delivery count underflow");
+        if (B2NativeSpikePendingDeliveries == 0 && B2NativeSpikePendingFinish != nil) {
+          finish = B2NativeSpikePendingFinish;
+          finishRunId = B2NativeSpikePendingFinishRunId;
+          B2NativeSpikePendingFinish = nil;
+          B2NativeSpikePendingFinishRunId = nil;
+        }
+      });
+      if (finish != nil) {
+        finish(@{ @"runId": finishRunId });
+      }
+    }];
+  });
 }
 
 @interface CamerawesomePlugin () <CameraInterface, AnalysisImageUtils>
@@ -165,7 +194,53 @@ void B2NativeSpikeEmit(NSDictionary *contextSnapshot, NSString *event, NSDiction
   instance.b2NativeSpikeChannel = [FlutterMethodChannel
     methodChannelWithName:@"daily_cam/b2_native_spike"
     binaryMessenger:[registrar messenger]];
+  B2NativeSpikeChannel = instance.b2NativeSpikeChannel;
   [instance.b2NativeSpikeChannel setMethodCallHandler:^(FlutterMethodCall *call, FlutterResult result) {
+    if ([call.method isEqualToString:@"finishContext"]) {
+      if (![call.arguments isKindOfClass:[NSDictionary class]]) {
+        result([FlutterError errorWithCode:@"invalid_finish_context"
+                                   message:@"finishContext requires a map"
+                                   details:nil]);
+        return;
+      }
+      NSString *runId = ((NSDictionary *)call.arguments)[@"runId"];
+      if (![runId isKindOfClass:[NSString class]] || runId.length == 0) {
+        result([FlutterError errorWithCode:@"invalid_finish_context"
+                                   message:@"runId must be a non-empty string"
+                                   details:nil]);
+        return;
+      }
+      __block FlutterError *finishError = nil;
+      __block BOOL finishNow = NO;
+      dispatch_sync(B2NativeSpikeStateQueue, ^{
+        NSString *activeRunId = B2NativeSpikeContext[@"runId"];
+        if (activeRunId == nil || ![activeRunId isEqualToString:runId]) {
+          finishError = [FlutterError errorWithCode:@"finish_context_mismatch"
+                                            message:@"finishContext runId mismatch"
+                                            details:nil];
+          return;
+        }
+        if (B2NativeSpikePendingFinish != nil) {
+          finishError = [FlutterError errorWithCode:@"finish_context_pending"
+                                            message:@"finishContext is already pending"
+                                            details:nil];
+          return;
+        }
+        B2NativeSpikeContext = nil;
+        if (B2NativeSpikePendingDeliveries == 0) {
+          finishNow = YES;
+        } else {
+          B2NativeSpikePendingFinish = [result copy];
+          B2NativeSpikePendingFinishRunId = [runId copy];
+        }
+      });
+      if (finishError != nil) {
+        result(finishError);
+      } else if (finishNow) {
+        result(@{ @"runId": runId });
+      }
+      return;
+    }
     if (![call.method isEqualToString:@"setContext"]) {
       result(FlutterMethodNotImplemented);
       return;

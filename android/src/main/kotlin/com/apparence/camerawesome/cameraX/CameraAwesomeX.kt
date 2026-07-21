@@ -54,7 +54,6 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlin.math.roundToInt
-import org.json.JSONObject
 
 
 enum class CaptureModes {
@@ -84,9 +83,22 @@ internal data class B2NativeSpikeContext(
 internal object B2NativeSpikeTelemetry {
     const val CHANNEL_NAME = "daily_cam/b2_native_spike"
     const val METHOD_SET_CONTEXT = "setContext"
-    private const val LOG_TAG = "B2NativeSpike"
-    private const val LOG_PREFIX = "[B2_NATIVE_SPIKE] "
+    const val METHOD_FINISH_CONTEXT = "finishContext"
+    const val METHOD_NATIVE_EVENT = "nativeEvent"
     private val contextReference = AtomicReference<B2NativeSpikeContext?>(null)
+    private val channelReference = AtomicReference<MethodChannel?>(null)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val deliveryLock = Any()
+    private var pendingDeliveries = 0
+    private var pendingFinish: (() -> Unit)? = null
+
+    fun attachChannel(channel: MethodChannel) {
+        channelReference.set(channel)
+    }
+
+    fun detachChannel(channel: MethodChannel?) {
+        channelReference.compareAndSet(channel, null)
+    }
 
     fun snapshot(): B2NativeSpikeContext? = contextReference.get()
 
@@ -140,6 +152,40 @@ internal object B2NativeSpikeTelemetry {
         contextReference.set(null)
     }
 
+    fun finishContext(arguments: Any?, onDrained: (Map<String, Any?>) -> Unit) {
+        val map = arguments as? Map<*, *>
+            ?: throw IllegalArgumentException("finishContext requires a map")
+        val runId = requiredString(map, "runId")
+        var finishNow = false
+        synchronized(deliveryLock) {
+            val current = contextReference.get()
+                ?: throw IllegalArgumentException("finishContext has no active context")
+            require(current.runId == runId) { "finishContext runId mismatch" }
+            require(pendingFinish == null) { "finishContext is already pending" }
+            contextReference.set(null)
+            val finish = { onDrained(mapOf("runId" to runId)) }
+            if (pendingDeliveries == 0) {
+                finishNow = true
+            } else {
+                pendingFinish = finish
+            }
+        }
+        if (finishNow) mainHandler.post { onDrained(mapOf("runId" to runId)) }
+    }
+
+    private fun completeDelivery() {
+        var finish: (() -> Unit)? = null
+        synchronized(deliveryLock) {
+            pendingDeliveries -= 1
+            check(pendingDeliveries >= 0) { "native spike delivery count underflow" }
+            if (pendingDeliveries == 0) {
+                finish = pendingFinish
+                pendingFinish = null
+            }
+        }
+        finish?.invoke()
+    }
+
     fun emit(
         context: B2NativeSpikeContext?,
         event: String,
@@ -183,7 +229,20 @@ internal object B2NativeSpikeTelemetry {
             "resumeToFirstFrameMs" to resumeToFirstFrameMs,
             "blackFrameObserved" to null,
         )
-        Log.i(LOG_TAG, LOG_PREFIX + jsonObject(values).toString())
+        synchronized(deliveryLock) {
+            val active = contextReference.get()
+            if (active?.runId != context.runId) return
+            val channel = channelReference.get() ?: return
+            pendingDeliveries += 1
+            mainHandler.post {
+                channel.invokeMethod(METHOD_NATIVE_EVENT, values, object : MethodChannel.Result {
+                    override fun success(result: Any?) = completeDelivery()
+                    override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) =
+                        completeDelivery()
+                    override fun notImplemented() = completeDelivery()
+                })
+            }
+        }
     }
 
     fun recordSetupApplied(
@@ -341,24 +400,6 @@ internal object B2NativeSpikeTelemetry {
 
     private fun elapsedRealtimeUs(): Long = SystemClock.elapsedRealtimeNanos() / 1000L
 
-    private fun jsonObject(values: Map<String, Any?>): JSONObject {
-        val result = JSONObject()
-        for ((key, value) in values) {
-            result.put(
-                key,
-                when (value) {
-                    null -> JSONObject.NULL
-                    is Map<*, *> -> jsonObject(
-                        value.entries.associate { (nestedKey, nestedValue) ->
-                            nestedKey.toString() to nestedValue
-                        }
-                    )
-                    else -> value
-                }
-            )
-        }
-        return result
-    }
 }
 
 class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
@@ -1178,14 +1219,19 @@ class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
             binding.binaryMessenger,
             B2NativeSpikeTelemetry.CHANNEL_NAME,
         ).also { channel ->
+            B2NativeSpikeTelemetry.attachChannel(channel)
             channel.setMethodCallHandler { call, result ->
-                if (call.method != B2NativeSpikeTelemetry.METHOD_SET_CONTEXT) {
-                    result.notImplemented()
-                    return@setMethodCallHandler
-                }
                 try {
-                    val revision = B2NativeSpikeTelemetry.setContext(call.arguments)
-                    result.success(mapOf("contextRevision" to revision))
+                    when (call.method) {
+                        B2NativeSpikeTelemetry.METHOD_SET_CONTEXT -> {
+                            val revision = B2NativeSpikeTelemetry.setContext(call.arguments)
+                            result.success(mapOf("contextRevision" to revision))
+                        }
+                        B2NativeSpikeTelemetry.METHOD_FINISH_CONTEXT -> {
+                            B2NativeSpikeTelemetry.finishContext(call.arguments, result::success)
+                        }
+                        else -> result.notImplemented()
+                    }
                 } catch (error: IllegalArgumentException) {
                     result.error(
                         "B2_NATIVE_SPIKE_INVALID_CONTEXT",
@@ -1198,6 +1244,7 @@ class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
     }
 
     override fun onDetachedFromEngine(binding: FlutterPluginBinding) {
+        B2NativeSpikeTelemetry.detachChannel(nativeSpikeChannel)
         nativeSpikeChannel?.setMethodCallHandler(null)
         nativeSpikeChannel = null
         B2NativeSpikeTelemetry.clearContext()
