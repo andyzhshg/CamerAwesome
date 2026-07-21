@@ -6,12 +6,6 @@ import 'package:flutter/material.dart';
 
 final previewWidgetKey = GlobalKey();
 
-typedef CamerawesomeNativeSpikeDartEvent = void Function(
-    String event, Map<String, Object?> fields);
-
-/// Temporary Batch 2 telemetry seam. Null in every production launch.
-CamerawesomeNativeSpikeDartEvent? camerawesomeNativeSpikeDartEvent;
-
 typedef OnPreviewCalculated = void Function(AnalysisPreview preview);
 
 class AnimatedPreviewFit extends StatefulWidget {
@@ -24,6 +18,7 @@ class AnimatedPreviewFit extends StatefulWidget {
   final OnPreviewCalculated? onPreviewCalculated;
   final Sensor sensor;
   final double previewDisplayScale;
+  final int previewPresentationQuarterTurns;
 
   const AnimatedPreviewFit({
     super.key,
@@ -36,6 +31,7 @@ class AnimatedPreviewFit extends StatefulWidget {
     this.onPreviewCalculated,
     this.previewPadding,
     this.previewDisplayScale = 1.0,
+    this.previewPresentationQuarterTurns = 0,
   });
 
   @override
@@ -53,7 +49,7 @@ class _AnimatedPreviewFitState extends State<AnimatedPreviewFit> {
     super.initState();
     sizeCalculator = PreviewSizeCalculator(
       previewFit: widget.previewFit,
-      previewSize: widget.previewSize,
+      previewSize: _presentedPreviewSize(widget),
       constraints: widget.constraints,
     );
     sizeCalculator!.compute();
@@ -72,15 +68,17 @@ class _AnimatedPreviewFitState extends State<AnimatedPreviewFit> {
     if (widget.previewFit != oldWidget.previewFit ||
         widget.previewSize.width != oldWidget.previewSize.width ||
         widget.previewSize.height != oldWidget.previewSize.height ||
+        widget.previewPresentationQuarterTurns !=
+            oldWidget.previewPresentationQuarterTurns ||
         widget.constraints != oldWidget.constraints) {
       var oldsizeCalculator = PreviewSizeCalculator(
         previewFit: oldWidget.previewFit,
-        previewSize: oldWidget.previewSize,
+        previewSize: _presentedPreviewSize(oldWidget),
         constraints: oldWidget.constraints,
       );
       sizeCalculator = PreviewSizeCalculator(
         previewFit: widget.previewFit,
-        previewSize: widget.previewSize,
+        previewSize: _presentedPreviewSize(widget),
         constraints: widget.constraints,
       );
       oldsizeCalculator.compute();
@@ -89,28 +87,16 @@ class _AnimatedPreviewFitState extends State<AnimatedPreviewFit> {
         begin: oldsizeCalculator.maxSize,
         end: sizeCalculator!.maxSize,
       );
+      maxSize = sizeCalculator!.maxSize;
       _handPreviewCalculated();
     }
   }
 
   void _handPreviewCalculated() {
-    camerawesomeNativeSpikeDartEvent?.call('preview_calculated', {
-      'previewFit': widget.previewFit.name,
-      'previewDisplayScale': widget.previewDisplayScale,
-      'previewSize': {
-        'width': sizeCalculator!.maxSize.width,
-        'height': sizeCalculator!.maxSize.height,
-      },
-      'offset': {
-        'dx': sizeCalculator!.offset.dx,
-        'dy': sizeCalculator!.offset.dy,
-      },
-      'scale': sizeCalculator!.zoom,
-    });
     if (widget.onPreviewCalculated != null) {
       widget.onPreviewCalculated!(
         AnalysisPreview(
-          nativePreviewSize: widget.previewSize.toSize(),
+          nativePreviewSize: _presentedPreviewSize(widget).toSize(),
           previewSize: sizeCalculator!.maxSize,
           offset: sizeCalculator!.offset,
           scale: sizeCalculator!.zoom,
@@ -122,6 +108,8 @@ class _AnimatedPreviewFitState extends State<AnimatedPreviewFit> {
 
   @override
   Widget build(BuildContext context) {
+    final quarterTurns = widget.previewPresentationQuarterTurns % 4;
+    final presentedPreviewSize = _presentedPreviewSize(widget);
     return TweenAnimationBuilder<Size>(
       builder: (context, currentSize, child) {
         final ratio = sizeCalculator!.zoom;
@@ -129,12 +117,14 @@ class _AnimatedPreviewFitState extends State<AnimatedPreviewFit> {
           alignment: widget.alignment,
           constraints: widget.constraints,
           previewFit: widget.previewFit,
-          previewSize: widget.previewSize,
+          previewSize: presentedPreviewSize,
           scale: ratio,
           maxSize: maxSize!,
           previewPadding: widget.previewPadding,
           previewDisplayScale: widget.previewDisplayScale,
-          child: child!,
+          child: quarterTurns == 0
+              ? child!
+              : RotatedBox(quarterTurns: quarterTurns, child: child!),
         );
       },
       tween: animation,
@@ -142,6 +132,13 @@ class _AnimatedPreviewFitState extends State<AnimatedPreviewFit> {
       curve: Curves.fastLinearToSlowEaseIn,
       child: widget.child,
     );
+  }
+
+  PreviewSize _presentedPreviewSize(AnimatedPreviewFit source) {
+    final quarterTurns = source.previewPresentationQuarterTurns % 4;
+    return quarterTurns.isOdd
+        ? source.previewSize.inverted()
+        : source.previewSize;
   }
 }
 
@@ -171,18 +168,6 @@ class PreviewFitWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    camerawesomeNativeSpikeDartEvent?.call('preview_fit_build', {
-      'previewFit': previewFit.name,
-      'previewDisplayScale': previewDisplayScale,
-      'constraints': {
-        'maxWidth': constraints.maxWidth,
-        'maxHeight': constraints.maxHeight,
-      },
-      'previewSize': {
-        'width': previewSize.width,
-        'height': previewSize.height,
-      },
-    });
     final transformController = TransformationController()
       ..value = (Matrix4.identity()..scale(scale));
 

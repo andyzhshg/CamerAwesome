@@ -6,25 +6,7 @@
 //
 
 #import "ImageStreamController.h"
-#import <math.h>
 #import <stdint.h>
-
-extern uint64_t B2NativeSpikeMonotonicUs(void);
-extern NSDictionary * _Nullable B2NativeSpikeContextSnapshot(void);
-extern NSDictionary *B2NativeSpikeCountersSnapshot(BOOL incrementSetup, BOOL incrementBind);
-extern void B2NativeSpikeEmit(NSDictionary *contextSnapshot, NSString *event, NSDictionary *fields);
-
-@interface ImageStreamController ()
-@property(nonatomic, copy, nullable) NSString *b2ProducerLens;
-@property(nonatomic, copy, nullable) NSString *b2NativeSessionId;
-@property(nonatomic, copy, nullable) NSString *b2RunId;
-@property(nonatomic) uint64_t b2FrameSequence;
-@property(nonatomic) uint64_t b2LastFrameUs;
-@property(nonatomic) NSInteger b2LastLoggedScenarioRevision;
-@property(nonatomic) BOOL b2ResumePending;
-@property(nonatomic) uint64_t b2ResumeUs;
-@property(nonatomic) NSInteger b2ResumeRevision;
-@end
 
 static const size_t BgraBytesPerPixel = 4;
 
@@ -54,38 +36,6 @@ static NSString *DeviceOrientationName(UIDeviceOrientation orientation) {
     default:
       return @"portrait_up";
   }
-}
-
-static NSString *B2RawDeviceOrientationName(UIDeviceOrientation orientation) {
-  switch (orientation) {
-    case UIDeviceOrientationPortrait:
-      return @"portraitUp";
-    case UIDeviceOrientationPortraitUpsideDown:
-      return @"portraitDown";
-    case UIDeviceOrientationLandscapeLeft:
-      return @"landscapeLeft";
-    case UIDeviceOrientationLandscapeRight:
-      return @"landscapeRight";
-    case UIDeviceOrientationFaceUp:
-      return @"faceUp";
-    case UIDeviceOrientationFaceDown:
-      return @"faceDown";
-    case UIDeviceOrientationUnknown:
-    default:
-      return @"unknown";
-  }
-}
-
-static id B2SamplePtsUs(CMSampleBufferRef sampleBuffer) {
-  CMTime pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
-  if (!CMTIME_IS_NUMERIC(pts)) {
-    return [NSNull null];
-  }
-  Float64 seconds = CMTimeGetSeconds(pts);
-  if (!isfinite(seconds) || seconds < 0) {
-    return [NSNull null];
-  }
-  return @((uint64_t)llround(seconds * 1000000.0));
 }
 
 static NSData *CopyUprightBGRA8888Bytes(
@@ -155,60 +105,8 @@ NSInteger const MaxPendingProcessedImage = 4;
   return self;
 }
 
-- (void)b2ConfigureProducerLens:(NSString *)lens nativeSessionId:(NSString *)nativeSessionId {
-  @synchronized (self) {
-    self.b2ProducerLens = lens;
-    self.b2NativeSessionId = nativeSessionId;
-  }
-}
-
-- (void)b2MarkResumeAtMonotonicUs:(uint64_t)monotonicUs contextRevision:(NSInteger)contextRevision {
-  @synchronized (self) {
-    self.b2ResumePending = YES;
-    self.b2ResumeUs = monotonicUs;
-    self.b2ResumeRevision = contextRevision;
-  }
-}
-
 # pragma mark - Camera Delegates
 - (void)captureOutput:(AVCaptureOutput *)output didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection orientation:(UIDeviceOrientation)orientation {
-  NSDictionary *b2Context = B2NativeSpikeContextSnapshot();
-  uint64_t b2NowUs = b2Context == nil ? 0 : B2NativeSpikeMonotonicUs();
-  uint64_t b2Sequence = 0;
-  NSNumber *b2FrameGapMs = nil;
-  NSNumber *b2ResumeToFirstFrameMs = nil;
-  BOOL b2ShouldLog = NO;
-  NSString *b2Lens = nil;
-  NSString *b2SessionId = nil;
-  if (b2Context != nil) {
-    @synchronized (self) {
-      NSString *runId = b2Context[@"runId"];
-      if (self.b2RunId == nil || ![self.b2RunId isEqualToString:runId]) {
-        self.b2RunId = runId;
-        self.b2FrameSequence = 0;
-        self.b2LastFrameUs = 0;
-        self.b2LastLoggedScenarioRevision = 0;
-        self.b2ResumePending = NO;
-      }
-
-      self.b2FrameSequence += 1;
-      b2Sequence = self.b2FrameSequence;
-      if (self.b2LastFrameUs > 0 && b2NowUs >= self.b2LastFrameUs) {
-        b2FrameGapMs = @((double)(b2NowUs - self.b2LastFrameUs) / 1000.0);
-      }
-      self.b2LastFrameUs = b2NowUs;
-
-      NSInteger revision = [b2Context[@"contextRevision"] integerValue];
-      BOOL scenarioFirst = revision != self.b2LastLoggedScenarioRevision;
-      BOOL everyThirtieth = b2Sequence % 30 == 0;
-      BOOL gapExceeded = b2FrameGapMs != nil && [b2FrameGapMs doubleValue] > 1000.0;
-      BOOL resumeFirst = self.b2ResumePending && self.b2ResumeRevision == revision;
-      b2ShouldLog = scenarioFirst || everyThirtieth || gapExceeded || resumeFirst;
-      b2Lens = self.b2ProducerLens;
-      b2SessionId = self.b2NativeSessionId;
-    }
-  }
-
   if (_imageStreamEventSink == nil) {
     return;
   }
@@ -219,29 +117,14 @@ NSInteger const MaxPendingProcessedImage = 4;
   if (shouldFPSGuard || shouldOverflowCrashingGuard) {
     return;
   }
-
-  if (b2Context != nil && b2ShouldLog) {
-    @synchronized (self) {
-      NSInteger revision = [b2Context[@"contextRevision"] integerValue];
-      self.b2LastLoggedScenarioRevision = revision;
-      if (self.b2ResumePending && self.b2ResumeRevision == revision) {
-        if (b2NowUs >= self.b2ResumeUs) {
-          b2ResumeToFirstFrameMs = @((double)(b2NowUs - self.b2ResumeUs) / 1000.0);
-        }
-        self.b2ResumePending = NO;
-      }
-    }
-  }
   
   _processingImage++;
   
   CVPixelBufferRef pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
   CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
   
-  size_t sourceWidth = CVPixelBufferGetWidth(pixelBuffer);
-  size_t sourceHeight = CVPixelBufferGetHeight(pixelBuffer);
-  size_t imageWidth = sourceWidth;
-  size_t imageHeight = sourceHeight;
+  size_t imageWidth = CVPixelBufferGetWidth(pixelBuffer);
+  size_t imageHeight = CVPixelBufferGetHeight(pixelBuffer);
   
   NSMutableArray *planes = [NSMutableArray array];
 
@@ -314,39 +197,6 @@ NSInteger const MaxPendingProcessedImage = 4;
     @"rotation": @"rotation0deg",
     @"deviceOrientation": DeviceOrientationName(orientation),
   };
-
-  if (b2Context != nil && b2ShouldLog) {
-    NSInteger uprightDegrees = UprightRotationDegreesForDeviceOrientation(orientation);
-    NSDictionary *analysisImage = @{
-      @"format": @"bgra8888",
-      @"width": @(imageWidth),
-      @"height": @(imageHeight),
-      @"sourceWidth": @(sourceWidth),
-      @"sourceHeight": @(sourceHeight),
-      @"cropLeft": [NSNull null],
-      @"cropTop": [NSNull null],
-      @"cropRight": [NSNull null],
-      @"cropBottom": [NSNull null],
-      @"rotation": @"rotation0deg",
-      @"frameSequence": @(b2Sequence),
-      @"samplePtsUs": B2SamplePtsUs(sampleBuffer),
-      @"latestNativeOrientation": [NSNull null],
-      @"callbackRawOrientation": B2RawDeviceOrientationName(orientation),
-      @"callbackRotationDegrees": @(uprightDegrees),
-      @"softwareRotated": @(uprightDegrees != 0),
-    };
-    B2NativeSpikeEmit(b2Context, @"analysis_frame", @{
-      @"eventDetail": @"delivered_to_dart",
-      @"lens": b2Lens ?: [NSNull null],
-      @"nativeSessionId": b2SessionId ?: [NSNull null],
-      @"nativeApplied": @YES,
-      @"monotonicUs": @(b2NowUs),
-      @"analysisImage": analysisImage,
-      @"frameGapMs": b2FrameGapMs ?: [NSNull null],
-      @"resumeToFirstFrameMs": b2ResumeToFirstFrameMs ?: [NSNull null],
-      @"counters": B2NativeSpikeCountersSnapshot(NO, NO),
-    });
-  }
   
   dispatch_async(dispatch_get_main_queue(), ^{
     self->_imageStreamEventSink(imageBuffer);

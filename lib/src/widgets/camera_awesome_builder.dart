@@ -107,6 +107,12 @@ class CameraAwesomeBuilder extends StatefulWidget {
 
   final double previewDisplayScale;
 
+  /// Flutter-only correction for raw-sensor preview presentation.
+  final int previewPresentationQuarterTurns;
+
+  /// Restricts only the live preview texture to this rect.
+  final Rect? previewViewportRect;
+
   /// THe default filter to use when the camera is started.
   final AwesomeFilter? defaultFilter;
 
@@ -141,6 +147,8 @@ class CameraAwesomeBuilder extends StatefulWidget {
     this.availableFilters,
     this.onMediaCaptureEvent,
     this.previewDisplayScale = 1.0,
+    this.previewPresentationQuarterTurns = 0,
+    this.previewViewportRect,
   });
 
   /// Use the camera with the built-in interface.
@@ -242,6 +250,8 @@ class CameraAwesomeBuilder extends StatefulWidget {
     List<AwesomeFilter>? filters,
     OnMediaCaptureEvent? onMediaCaptureEvent,
     double previewDisplayScale = 1.0,
+    int previewPresentationQuarterTurns = 0,
+    Rect? previewViewportRect,
   }) : this._(
           sensorConfig: sensorConfig ??
               SensorConfig.single(
@@ -266,6 +276,8 @@ class CameraAwesomeBuilder extends StatefulWidget {
           availableFilters: filters,
           onMediaCaptureEvent: onMediaCaptureEvent,
           previewDisplayScale: previewDisplayScale,
+          previewPresentationQuarterTurns: previewPresentationQuarterTurns,
+          previewViewportRect: previewViewportRect,
         );
 
   /// Use this constructor when you don't want to take pictures or record videos.
@@ -354,9 +366,6 @@ class _CameraWidgetBuilder extends State<CameraAwesomeBuilder>
 
   @override
   void dispose() {
-    camerawesomeNativeSpikeDartEvent?.call('lifecycle', {
-      'eventDetail': 'dart_builder_dispose',
-    });
     WidgetsBinding.instance.removeObserver(this);
     _cameraContext.dispose();
     _captureStateListener?.cancel();
@@ -370,9 +379,6 @@ class _CameraWidgetBuilder extends State<CameraAwesomeBuilder>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    camerawesomeNativeSpikeDartEvent?.call('lifecycle', {
-      'eventDetail': state.name,
-    });
     switch (state) {
       case AppLifecycleState.resumed:
         _cameraContext.sensorConfig.setZoomToOneX();
@@ -393,9 +399,6 @@ class _CameraWidgetBuilder extends State<CameraAwesomeBuilder>
   @override
   void initState() {
     super.initState();
-    camerawesomeNativeSpikeDartEvent?.call('host_build', {
-      'eventDetail': 'camera_builder_init',
-    });
     WidgetsBinding.instance.addObserver(this);
 
     _cameraContext = CameraContext.create(
@@ -503,6 +506,9 @@ class _CameraWidgetBuilder extends State<CameraAwesomeBuilder>
                         pictureInPictureConfigBuilder:
                             widget.pictureInPictureConfigBuilder,
                         previewDisplayScale: widget.previewDisplayScale,
+                        previewPresentationQuarterTurns:
+                            widget.previewPresentationQuarterTurns,
+                        previewViewportRect: widget.previewViewportRect,
                       ),
               ),
             ],

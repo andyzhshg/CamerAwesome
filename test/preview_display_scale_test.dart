@@ -77,59 +77,90 @@ void main() {
 
         expect(emitted1, isNotNull);
         expect(emitted2, isNotNull);
-        expect(emitted1!.nativePreviewSize, equals(emitted2!.nativePreviewSize));
+        expect(
+            emitted1!.nativePreviewSize, equals(emitted2!.nativePreviewSize));
         expect(emitted1!.previewSize, equals(emitted2!.previewSize));
         expect(emitted1!.offset, equals(emitted2!.offset));
         expect(emitted1!.scale, equals(emitted2!.scale));
       },
     );
+  });
 
-    testWidgets(
-      'scale-only update changes paint transform without recalculating analysis preview',
-      (tester) async {
-        final events = <String>[];
-        camerawesomeNativeSpikeDartEvent = (event, fields) {
-          events.add(event);
-        };
-        addTearDown(() => camerawesomeNativeSpikeDartEvent = null);
+  group('preview presentation quarter turns', () {
+    testWidgets('odd quarter turns swap emitted native preview dimensions', (
+      tester,
+    ) async {
+      AnalysisPreview? emitted;
 
-        Widget subject(double displayScale) => MaterialApp(
-              home: SizedBox(
-                width: 400,
-                height: 800,
-                child: AnimatedPreviewFit(
-                  previewFit: CameraPreviewFit.contain,
-                  previewSize: PreviewSize(width: 960, height: 1280),
-                  constraints:
-                      const BoxConstraints(maxWidth: 400, maxHeight: 800),
-                  sensor: Sensor.position(SensorPosition.front),
-                  previewDisplayScale: displayScale,
-                  child: const ColoredBox(color: Colors.red),
-                ),
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SizedBox(
+            width: 800,
+            height: 400,
+            child: AnimatedPreviewFit(
+              previewFit: CameraPreviewFit.contain,
+              previewSize: PreviewSize(width: 960, height: 1280),
+              constraints: const BoxConstraints(
+                maxWidth: 800,
+                maxHeight: 400,
               ),
-            );
+              sensor: Sensor.position(SensorPosition.front),
+              previewPresentationQuarterTurns: 1,
+              onPreviewCalculated: (preview) => emitted = preview,
+              child: const ColoredBox(color: Colors.red),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
 
-        await tester.pumpWidget(subject(1.0));
-        await tester.pumpAndSettle();
-        final initialCalculated =
-            events.where((event) => event == 'preview_calculated').length;
+      expect(emitted, isNotNull);
+      expect(emitted!.nativePreviewSize, const Size(1280, 960));
+      expect(find.byType(RotatedBox), findsOneWidget);
+      expect(
+          tester.widget<RotatedBox>(find.byType(RotatedBox)).quarterTurns, 1);
+      expect(
+        find.byKey(const ValueKey('camerawesome-preview-display-scale')),
+        findsOneWidget,
+      );
+    });
 
-        await tester.pumpWidget(subject(1.5));
-        await tester.pumpAndSettle();
+    testWidgets('quarter-turn updates recalculate geometry without extra scale',
+        (
+      tester,
+    ) async {
+      AnalysisPreview? emitted;
 
-        final transform = tester.widget<Transform>(
-          find.byKey(const ValueKey('camerawesome-preview-display-scale')),
-        );
-        expect(transform.transform.storage[0], closeTo(1.5, 0.0001));
-        expect(
-          events.where((event) => event == 'preview_calculated').length,
-          initialCalculated,
-        );
-        expect(
-          events.where((event) => event == 'preview_fit_build').length,
-          greaterThanOrEqualTo(2),
-        );
-      },
-    );
+      Widget subject(int quarterTurns) => MaterialApp(
+            home: SizedBox(
+              width: 800,
+              height: 400,
+              child: AnimatedPreviewFit(
+                previewFit: CameraPreviewFit.contain,
+                previewSize: PreviewSize(width: 960, height: 1280),
+                constraints:
+                    const BoxConstraints(maxWidth: 800, maxHeight: 400),
+                sensor: Sensor.position(SensorPosition.front),
+                previewPresentationQuarterTurns: quarterTurns,
+                onPreviewCalculated: (preview) => emitted = preview,
+                child: const ColoredBox(color: Colors.red),
+              ),
+            ),
+          );
+
+      await tester.pumpWidget(subject(0));
+      await tester.pumpAndSettle();
+      expect(emitted!.nativePreviewSize, const Size(960, 1280));
+      expect(find.byType(RotatedBox), findsNothing);
+
+      await tester.pumpWidget(subject(3));
+      await tester.pumpAndSettle();
+      expect(emitted!.nativePreviewSize, const Size(1280, 960));
+      expect(find.byType(RotatedBox), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('camerawesome-preview-display-scale')),
+        findsOneWidget,
+      );
+    });
   });
 }

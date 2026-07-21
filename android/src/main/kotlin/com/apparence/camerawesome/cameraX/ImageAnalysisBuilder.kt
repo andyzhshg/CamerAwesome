@@ -28,9 +28,6 @@ class ImageAnalysisBuilder private constructor(
     private val executor: Executor,
     var previewStreamSink: EventChannel.EventSink? = null,
     private val maxFramesPerSecond: Double?,
-    private val nativeSessionIdProvider: () -> String?,
-    private val actualLensProvider: () -> String?,
-    private val latestNativeOrientationProvider: () -> String,
 ) {
     private var lastImageEmittedTimeStamp: Long? = null
     private var countDownLatch = ResettableCountDownLatch(1)
@@ -45,9 +42,6 @@ class ImageAnalysisBuilder private constructor(
             executor: Executor,
             width: Long?,
             maxFramesPerSecond: Double?,
-            nativeSessionIdProvider: () -> String?,
-            actualLensProvider: () -> String?,
-            latestNativeOrientationProvider: () -> String,
         ): ImageAnalysisBuilder {
             var widthOrDefault = 1024
             if (width != null && width > 0) {
@@ -65,9 +59,6 @@ class ImageAnalysisBuilder private constructor(
                 height.toInt(),
                 executor,
                 maxFramesPerSecond = maxFps,
-                nativeSessionIdProvider = nativeSessionIdProvider,
-                actualLensProvider = actualLensProvider,
-                latestNativeOrientationProvider = latestNativeOrientationProvider,
             )
         }
     }
@@ -86,25 +77,6 @@ class ImageAnalysisBuilder private constructor(
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .setOutputImageFormat(outputImageFormat).build()
         imageAnalysis.setAnalyzer(Dispatchers.IO.asExecutor()) { imageProxy ->
-            val spikeContext = B2NativeSpikeTelemetry.snapshot()
-            if (spikeContext != null) {
-                val cropRect = imageProxy.cropRect
-                B2NativeSpikeTelemetry.recordAnalysisFrame(
-                    context = spikeContext,
-                    nativeSessionId = nativeSessionIdProvider(),
-                    lens = actualLensProvider(),
-                    latestNativeOrientation = latestNativeOrientationProvider(),
-                    format = format.name.lowercase(),
-                    width = imageProxy.width,
-                    height = imageProxy.height,
-                    cropLeft = cropRect.left,
-                    cropTop = cropRect.top,
-                    cropRight = cropRect.right,
-                    cropBottom = cropRect.bottom,
-                    callbackRotationDegrees = imageProxy.imageInfo.rotationDegrees,
-                    samplePtsUs = imageProxy.imageInfo.timestamp / 1000L,
-                )
-            }
             if (previewStreamSink == null) {
                 return@setAnalyzer
             }
