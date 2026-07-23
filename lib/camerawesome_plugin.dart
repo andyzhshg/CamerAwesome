@@ -6,6 +6,7 @@ import 'package:camerawesome/pigeon.dart';
 import 'package:camerawesome/src/logger.dart';
 import 'package:camerawesome/src/orchestrator/adapters/pigeon_sensor_adapter.dart';
 import 'package:camerawesome/src/orchestrator/models/camera_physical_button.dart';
+import 'package:camerawesome/src/orchestrator/models/preview_transform_snapshot.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/services.dart';
 
@@ -42,7 +43,12 @@ class CamerawesomePlugin {
   static const EventChannel _physicalButtonChannel =
       EventChannel('camerawesome/physical_button');
 
+  static const EventChannel _previewTransformChannel =
+      EventChannel('camerawesome/preview_transform');
+
   static Stream<CameraOrientations>? _orientationStream;
+
+  static Stream<PreviewTransformEvent>? _previewTransformStream;
 
   static Stream<CameraPhysicalButton>? _physicalButtonStream;
 
@@ -79,6 +85,7 @@ class CamerawesomePlugin {
       return true;
     }
     _orientationStream = null;
+    _previewTransformStream = null;
     currentState = CameraRunningState.stopping;
     bool res;
     try {
@@ -114,6 +121,23 @@ class CamerawesomePlugin {
       sink.add(newOrientation!);
     }));
     return _orientationStream;
+  }
+
+  static Stream<PreviewTransformEvent> get previewTransformStream {
+    _previewTransformStream ??= _previewTransformChannel
+        .receiveBroadcastStream('previewTransformChannel')
+        .transform(
+      StreamTransformer<dynamic, PreviewTransformEvent>.fromHandlers(
+        handleData: (data, sink) {
+          try {
+            sink.add(PreviewTransformEvent.fromMap(data));
+          } on Object catch (error, stackTrace) {
+            sink.addError(error, stackTrace);
+          }
+        },
+      ),
+    );
+    return _previewTransformStream!;
   }
 
   static Stream<CameraPhysicalButton>? listenPhysicalButton() {
