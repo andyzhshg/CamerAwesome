@@ -11,6 +11,8 @@
 @implementation SingleCameraPreview {
   dispatch_queue_t _dispatchQueue;
   PreviewTransformPublisher *_previewTransformPublisher;
+  size_t _lastPublishedPreviewBufferWidth;
+  size_t _lastPublishedPreviewBufferHeight;
 }
 
 - (instancetype)initWithCameraSensor:(PigeonSensorPosition)sensor
@@ -649,8 +651,22 @@
   if (output == _captureVideoOutput) {
     CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
     if (imageBuffer != nil) {
-      [_previewTransformPublisher updateBufferWidth:CVPixelBufferGetWidth(imageBuffer)
-                                            height:CVPixelBufferGetHeight(imageBuffer)];
+      size_t bufferWidth = CVPixelBufferGetWidth(imageBuffer);
+      size_t bufferHeight = CVPixelBufferGetHeight(imageBuffer);
+      if (bufferWidth != _lastPublishedPreviewBufferWidth ||
+          bufferHeight != _lastPublishedPreviewBufferHeight) {
+        _lastPublishedPreviewBufferWidth = bufferWidth;
+        _lastPublishedPreviewBufferHeight = bufferHeight;
+        dispatch_block_t publishBufferSize = ^{
+          [self->_previewTransformPublisher updateBufferWidth:bufferWidth
+                                                       height:bufferHeight];
+        };
+        if ([NSThread isMainThread]) {
+          publishBufferSize();
+        } else {
+          dispatch_async(dispatch_get_main_queue(), publishBufferSize);
+        }
+      }
     }
     [self.previewTexture updateBuffer:sampleBuffer];
     if (_onPreviewFrameAvailable) {

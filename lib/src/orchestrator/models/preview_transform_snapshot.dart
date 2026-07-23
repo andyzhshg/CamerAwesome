@@ -115,6 +115,12 @@ final class PreviewTransformReady extends PreviewTransformEvent {
   final int textureId;
   final int presentationQuarterTurns;
   final Size bufferSize;
+
+  /// Buffer dimensions after applying [presentationQuarterTurns].
+  ///
+  /// This is informational transform metadata, not a second preview-layout
+  /// authority. Widgets must use the preview size resolved by
+  /// [AwesomeCameraPreview] after its fit pipeline has normalized sensor axes.
   final Size orientedSize;
   final Rect cropRect;
 
