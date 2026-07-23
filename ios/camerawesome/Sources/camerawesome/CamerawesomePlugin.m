@@ -8,6 +8,7 @@
 #import "CaptureModeUtils.h"
 #import "FlashModeUtils.h"
 #import "AnalysisController.h"
+#import "CameraPreview/PreviewTransformPublisher.h"
 
 FlutterEventSink orientationEventSink;
 FlutterEventSink videoRecordingEventSink;
@@ -19,6 +20,7 @@ FlutterEventSink physicalButtonEventSink;
 @property NSMutableArray<NSNumber *> *texturesIds;
 @property SingleCameraPreview *camera;
 @property MultiCameraPreview *multiCamera;
+@property PreviewTransformPublisher *previewTransformPublisher;
 - (instancetype)init:(NSObject<FlutterPluginRegistrar>*)registrar;
 @end
 
@@ -35,6 +37,7 @@ FlutterEventSink physicalButtonEventSink;
   self = [super init];
   
   _textureRegistry = registrar.textures;
+  _previewTransformPublisher = [[PreviewTransformPublisher alloc] init];
   
   if (_dispatchQueue == nil) {
     _dispatchQueue = dispatch_queue_create("camerawesome.dispatchqueue", NULL);
@@ -55,9 +58,12 @@ FlutterEventSink physicalButtonEventSink;
                                                                       binaryMessenger:[registrar messenger]];
   FlutterEventChannel *physicalButtonChannel = [FlutterEventChannel eventChannelWithName:@"camerawesome/physical_button"
                                                                          binaryMessenger:[registrar messenger]];
+  FlutterEventChannel *previewTransformChannel = [FlutterEventChannel eventChannelWithName:@"camerawesome/preview_transform"
+                                                                           binaryMessenger:[registrar messenger]];
   [orientationChannel setStreamHandler:instance];
   [imageStreamChannel setStreamHandler:instance];
   [physicalButtonChannel setStreamHandler:instance];
+  [previewTransformChannel setStreamHandler:instance];
   
   CameraInterfaceSetup(registrar.messenger, instance);
   AnalysisImageUtilsSetup(registrar.messenger, instance);
@@ -87,6 +93,7 @@ FlutterEventSink physicalButtonEventSink;
     [self.multiCamera dispose];
     self.multiCamera = nil;
   }
+  [self.previewTransformPublisher invalidateActiveSession];
   
   _texturesIds = [NSMutableArray new];
   
@@ -131,9 +138,11 @@ FlutterEventSink physicalButtonEventSink;
                                                     aspectRatioMode:aspectRatioMode
                                                         captureMode:captureModeType
                                                          completion:completion
-                                                      dispatchQueue:dispatch_queue_create("camerawesome.single_preview.dispatchqueue", NULL)];
+                                                      dispatchQueue:dispatch_queue_create("camerawesome.single_preview.dispatchqueue", NULL)
+                                         previewTransformPublisher:self.previewTransformPublisher];
     
     int64_t textureId = [self->_textureRegistry registerTexture:self.camera.previewTexture];
+    [self.previewTransformPublisher bindTextureId:textureId];
     
     __weak typeof(self) weakSelf = self;
     self.camera.onPreviewFrameAvailable = ^{
@@ -181,6 +190,7 @@ FlutterEventSink physicalButtonEventSink;
       }
     });
   }
+  [self.previewTransformPublisher invalidateActiveSession];
   
   return @(YES);
 }
@@ -230,6 +240,8 @@ FlutterEventSink physicalButtonEventSink;
     if (self.camera != nil) {
       [self.camera setPhysicalButtonEventSink:physicalButtonEventSink];
     }
+  } else if ([arguments isEqual:@"previewTransformChannel"]) {
+    [self.previewTransformPublisher setEventSink:eventSink];
   }
   
   return nil;
@@ -254,6 +266,8 @@ FlutterEventSink physicalButtonEventSink;
     if (self.camera != nil) {
       [self.camera setPhysicalButtonEventSink:physicalButtonEventSink];
     }
+  } else if ([arguments isEqual:@"previewTransformChannel"]) {
+    [self.previewTransformPublisher setEventSink:nil];
   }
   return nil;
 }

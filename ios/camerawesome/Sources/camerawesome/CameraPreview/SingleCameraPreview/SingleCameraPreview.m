@@ -6,9 +6,11 @@
 //
 
 #import "SingleCameraPreview.h"
+#import "../PreviewTransformPublisher.h"
 
 @implementation SingleCameraPreview {
   dispatch_queue_t _dispatchQueue;
+  PreviewTransformPublisher *_previewTransformPublisher;
 }
 
 - (instancetype)initWithCameraSensor:(PigeonSensorPosition)sensor
@@ -20,11 +22,13 @@
                      aspectRatioMode:(AspectRatio)aspectRatioMode
                          captureMode:(CaptureModes)captureMode
                           completion:(nonnull void (^)(NSNumber * _Nullable, FlutterError * _Nullable))completion
-                       dispatchQueue:(dispatch_queue_t)dispatchQueue {
+                       dispatchQueue:(dispatch_queue_t)dispatchQueue
+          previewTransformPublisher:(PreviewTransformPublisher *)previewTransformPublisher {
   self = [super init];
   
   _completion = completion;
   _dispatchQueue = dispatchQueue;
+  _previewTransformPublisher = previewTransformPublisher;
   
   _previewTexture = [[CameraPreviewTexture alloc] init];
   
@@ -169,6 +173,7 @@
   // preview always shows the raw sensor image). mlkit input is rotated separately
   // via CopyUprightBGRA8888Bytes so detection works in every device orientation.
   [_captureConnection setVideoOrientation:AVCaptureVideoOrientationPortrait];
+  [_previewTransformPublisher startSessionWithMirroring:_captureConnection.videoMirrored];
 }
 
 - (void)dealloc {
@@ -254,6 +259,7 @@
 
 /// Dispose camera inputs & outputs
 - (void)dispose {
+  [_previewTransformPublisher invalidateActiveSession];
   [self stop];
   [self.physicalButtonController stopListening];
   
@@ -385,6 +391,7 @@
   
   if ([_captureConnection isVideoMirroringSupported]) {
       [_captureConnection setVideoMirrored:value];
+      [_previewTransformPublisher updateMirroring:_captureConnection.videoMirrored];
   }
 }
 
@@ -640,6 +647,11 @@
 
 - (void)captureOutput:(AVCaptureOutput *)output didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection {
   if (output == _captureVideoOutput) {
+    CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    if (imageBuffer != nil) {
+      [_previewTransformPublisher updateBufferWidth:CVPixelBufferGetWidth(imageBuffer)
+                                            height:CVPixelBufferGetHeight(imageBuffer)];
+    }
     [self.previewTexture updateBuffer:sampleBuffer];
     if (_onPreviewFrameAvailable) {
       _onPreviewFrameAvailable();

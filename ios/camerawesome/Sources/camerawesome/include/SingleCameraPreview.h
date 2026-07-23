@@ -29,6 +29,8 @@
 #import "CameraPreviewTexture.h"
 #import "MultiCameraPreview.h"
 
+@class PreviewTransformPublisher;
+
 NS_ASSUME_NONNULL_BEGIN
 
 @interface SingleCameraPreview : NSObject<AVCaptureVideoDataOutputSampleBufferDelegate,
@@ -75,7 +77,8 @@ AVCaptureAudioDataOutputSampleBufferDelegate>
                      aspectRatioMode:(AspectRatio)aspectRatioMode
                          captureMode:(CaptureModes)captureMode
                           completion:(nonnull void (^)(NSNumber * _Nullable, FlutterError * _Nullable))completion
-                       dispatchQueue:(dispatch_queue_t)dispatchQueue;
+                       dispatchQueue:(dispatch_queue_t)dispatchQueue
+          previewTransformPublisher:(PreviewTransformPublisher *)previewTransformPublisher;
 - (void)setImageStreamEvent:(FlutterEventSink)imageStreamEventSink;
 - (void)setOrientationEventSink:(FlutterEventSink)orientationEventSink;
 - (void)setPhysicalButtonEventSink:(FlutterEventSink)physicalButtonEventSink;
