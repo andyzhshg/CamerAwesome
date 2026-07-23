@@ -56,11 +56,9 @@
   [self invalidateActiveSession];
   _sessionId = ++_nextSessionId;
   _revision = 0;
-  _textureId = 0;
   _bufferWidth = 0;
   _bufferHeight = 0;
   _hasActiveSession = YES;
-  _hasTexture = NO;
   _hasBuffer = NO;
   _isMirroring = isMirroring;
   [self emitInvalidated];
@@ -71,14 +69,26 @@
   if (!_hasActiveSession) {
     return;
   }
+  if (_hasTexture && _textureId == textureId) {
+    return;
+  }
   _textureId = textureId;
   _hasTexture = YES;
   [self publishReadyIfPossible];
 }
 
+- (void)clearTextureBinding {
+  NSAssert([NSThread isMainThread], @"Preview texture binding must use the main thread");
+  _textureId = 0;
+  _hasTexture = NO;
+}
+
 - (void)updateBufferWidth:(size_t)bufferWidth height:(size_t)bufferHeight {
   NSAssert([NSThread isMainThread], @"Preview buffer updates must use the main thread");
   if (!_hasActiveSession || bufferWidth == 0 || bufferHeight == 0) {
+    return;
+  }
+  if (_hasBuffer && _bufferWidth == bufferWidth && _bufferHeight == bufferHeight) {
     return;
   }
   _bufferWidth = bufferWidth;
@@ -90,6 +100,9 @@
 - (void)updateMirroring:(BOOL)isMirroring {
   NSAssert([NSThread isMainThread], @"Preview mirror updates must use the main thread");
   if (!_hasActiveSession) {
+    return;
+  }
+  if (_isMirroring == isMirroring) {
     return;
   }
   _isMirroring = isMirroring;

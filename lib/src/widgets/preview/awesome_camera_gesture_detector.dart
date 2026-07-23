@@ -15,11 +15,13 @@ class OnPreviewTapBuilder {
   final PreviewSize Function() pixelPreviewSizeGetter;
   final PreviewSize Function() flutterPreviewSizeGetter;
   final OnPreviewTap onPreviewTap;
+  final Offset Function(Offset position)? tapPositionMapper;
 
   const OnPreviewTapBuilder({
     required this.pixelPreviewSizeGetter,
     required this.flutterPreviewSizeGetter,
     required this.onPreviewTap,
+    this.tapPositionMapper,
   });
 }
 
@@ -128,7 +130,9 @@ class _AwesomeCameraGestureDetector
                   _tapPosition = details.localPosition;
                 });
                 widget.onPreviewTapBuilder!.onPreviewTap.onTap(
-                  _tapPosition!,
+                  widget.onPreviewTapBuilder!.tapPositionMapper
+                          ?.call(_tapPosition!) ??
+                      _tapPosition!,
                   widget.onPreviewTapBuilder!.flutterPreviewSizeGetter(),
                   widget.onPreviewTapBuilder!.pixelPreviewSizeGetter(),
                 );

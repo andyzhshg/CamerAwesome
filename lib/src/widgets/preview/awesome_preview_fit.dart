@@ -18,6 +18,7 @@ class AnimatedPreviewFit extends StatefulWidget {
   final OnPreviewCalculated? onPreviewCalculated;
   final Sensor sensor;
   final double previewDisplayScale;
+  final PreviewTransformReady? presentationTransform;
 
   const AnimatedPreviewFit({
     super.key,
@@ -30,6 +31,7 @@ class AnimatedPreviewFit extends StatefulWidget {
     this.onPreviewCalculated,
     this.previewPadding,
     this.previewDisplayScale = 1.0,
+    this.presentationTransform,
   });
 
   @override
@@ -37,9 +39,6 @@ class AnimatedPreviewFit extends StatefulWidget {
 }
 
 class _AnimatedPreviewFitState extends State<AnimatedPreviewFit> {
-  late Tween<Size> animation;
-  Size? maxSize;
-
   PreviewSizeCalculator? sizeCalculator;
 
   @override
@@ -51,12 +50,6 @@ class _AnimatedPreviewFitState extends State<AnimatedPreviewFit> {
       constraints: widget.constraints,
     );
     sizeCalculator!.compute();
-    maxSize = sizeCalculator!.maxSize;
-
-    animation = Tween<Size>(
-      begin: maxSize,
-      end: maxSize,
-    );
     _handPreviewCalculated();
   }
 
@@ -64,24 +57,18 @@ class _AnimatedPreviewFitState extends State<AnimatedPreviewFit> {
   void didUpdateWidget(covariant AnimatedPreviewFit oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.previewFit != oldWidget.previewFit ||
-        widget.previewSize != oldWidget.previewSize ||
+        widget.previewSize.width != oldWidget.previewSize.width ||
+        widget.previewSize.height != oldWidget.previewSize.height ||
         widget.constraints != oldWidget.constraints) {
-      var oldsizeCalculator = PreviewSizeCalculator(
-        previewFit: oldWidget.previewFit,
-        previewSize: oldWidget.previewSize,
-        constraints: oldWidget.constraints,
-      );
       sizeCalculator = PreviewSizeCalculator(
         previewFit: widget.previewFit,
         previewSize: widget.previewSize,
         constraints: widget.constraints,
       );
-      oldsizeCalculator.compute();
       sizeCalculator!.compute();
-      animation = Tween<Size>(
-        begin: oldsizeCalculator.maxSize,
-        end: sizeCalculator!.maxSize,
-      );
+      _handPreviewCalculated();
+    } else if (widget.previewDisplayScale != oldWidget.previewDisplayScale ||
+        widget.presentationTransform != oldWidget.presentationTransform) {
       _handPreviewCalculated();
     }
   }
@@ -95,6 +82,7 @@ class _AnimatedPreviewFitState extends State<AnimatedPreviewFit> {
           offset: sizeCalculator!.offset,
           scale: sizeCalculator!.zoom,
           sensor: widget.sensor,
+          presentationTransform: widget.presentationTransform,
         ),
       );
     }
@@ -102,24 +90,15 @@ class _AnimatedPreviewFitState extends State<AnimatedPreviewFit> {
 
   @override
   Widget build(BuildContext context) {
-    return TweenAnimationBuilder<Size>(
-      builder: (context, currentSize, child) {
-        final ratio = sizeCalculator!.zoom;
-        return PreviewFitWidget(
-          alignment: widget.alignment,
-          constraints: widget.constraints,
-          previewFit: widget.previewFit,
-          previewSize: widget.previewSize,
-          scale: ratio,
-          maxSize: maxSize!,
-          previewPadding: widget.previewPadding,
-          previewDisplayScale: widget.previewDisplayScale,
-          child: child!,
-        );
-      },
-      tween: animation,
-      duration: const Duration(milliseconds: 700),
-      curve: Curves.fastLinearToSlowEaseIn,
+    return PreviewFitWidget(
+      alignment: widget.alignment,
+      constraints: widget.constraints,
+      previewFit: widget.previewFit,
+      previewSize: widget.previewSize,
+      scale: sizeCalculator!.zoom,
+      maxSize: sizeCalculator!.maxSize,
+      previewPadding: widget.previewPadding,
+      previewDisplayScale: widget.previewDisplayScale,
       child: widget.child,
     );
   }
@@ -152,7 +131,7 @@ class PreviewFitWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final transformController = TransformationController()
-      ..value = (Matrix4.identity()..scale(scale));
+      ..value = (Matrix4.identity()..scaleByDouble(scale, scale, scale, 1.0));
 
     return Align(
       alignment: alignment,

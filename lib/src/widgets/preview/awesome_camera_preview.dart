@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:camerawesome/camerawesome_plugin.dart';
 import 'package:camerawesome/pigeon.dart';
+import 'package:camerawesome/src/orchestrator/preview_transform/preview_transform_tracker.dart';
 import 'package:camerawesome/src/widgets/preview/awesome_preview_fit.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
@@ -29,6 +30,8 @@ class AwesomeCameraPreview extends StatefulWidget {
   final Alignment alignment;
   final PictureInPictureConfigBuilder? pictureInPictureConfigBuilder;
   final double previewDisplayScale;
+  @visibleForTesting
+  final Stream<PreviewTransformEvent>? previewTransformStream;
 
   const AwesomeCameraPreview({
     super.key,
@@ -43,6 +46,7 @@ class AwesomeCameraPreview extends StatefulWidget {
     required this.alignment,
     this.pictureInPictureConfigBuilder,
     this.previewDisplayScale = 1.0,
+    this.previewTransformStream,
   });
 
   @override
@@ -54,15 +58,35 @@ class AwesomeCameraPreview extends StatefulWidget {
 class AwesomeCameraPreviewState extends State<AwesomeCameraPreview> {
   PreviewSize? _previewSize;
 
-  final List<Texture> _textures = [];
+  final List<_PreviewTextureEntry> _textures = [];
+  final PreviewTransformTracker _previewTransformTracker =
+      PreviewTransformTracker();
 
-  PreviewSize? get pixelPreviewSize => _previewSize;
+  PreviewTransformReady? get _matchingTransform {
+    if (_textures.isEmpty) {
+      return null;
+    }
+    return _previewTransformTracker.readyForTexture(_textures.first.textureId);
+  }
+
+  PreviewSize? get pixelPreviewSize {
+    final transform = _matchingTransform;
+    if (transform == null) {
+      return null;
+    }
+    return PreviewSize(
+      width: transform.orientedSize.width,
+      height: transform.orientedSize.height,
+    );
+  }
 
   StreamSubscription? _sensorConfigSubscription;
   StreamSubscription? _aspectRatioSubscription;
+  StreamSubscription<PreviewTransformEvent>? _previewTransformSubscription;
   CameraAspectRatios? _aspectRatio;
   double? _aspectRatioValue;
   AnalysisPreview? _preview;
+  bool _previewTransformFailed = false;
 
   // TODO: fetch this value from the native side
   final int kMaximumSupportedFloatingPreview = 3;
@@ -70,6 +94,43 @@ class AwesomeCameraPreviewState extends State<AwesomeCameraPreview> {
   @override
   void initState() {
     super.initState();
+    _previewTransformSubscription = (widget.previewTransformStream ??
+            CamerawesomePlugin.previewTransformStream)
+        .listen(
+      (event) {
+        if (!mounted) {
+          return;
+        }
+        final previousTransform = _matchingTransform;
+        _previewTransformTracker.accept(event);
+        if (event is PreviewTransformReady) {
+          _adoptAcceptedPrimaryTexture(event);
+        }
+        final nextTransform = _matchingTransform;
+        final presentationChanged = !_samePresentation(
+          previousTransform,
+          nextTransform,
+        );
+        if (!_previewTransformFailed && !presentationChanged) {
+          return;
+        }
+        setState(() {
+          _previewTransformFailed = false;
+          if (presentationChanged) {
+            _preview = null;
+          }
+        });
+      },
+      onError: (Object _, StackTrace __) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _previewTransformFailed = true;
+          _preview = null;
+        });
+      },
+    );
     Future.wait([
       widget.state.previewSize(0),
       _loadTextures(),
@@ -120,20 +181,42 @@ class AwesomeCameraPreviewState extends State<AwesomeCameraPreview> {
       for (int i = 0; i < 2; i++) {
         final textureId = await widget.state.previewTextureId(0);
         if (textureId != null) {
-          _textures.add(
-            Texture(textureId: textureId),
-          );
+          _addLoadedTexture(0, textureId);
         }
       }
     } else {
       for (int i = 0; i < sensors; i++) {
         final textureId = await widget.state.previewTextureId(i);
         if (textureId != null) {
-          _textures.add(
-            Texture(textureId: textureId),
-          );
+          _addLoadedTexture(i, textureId);
         }
       }
+    }
+  }
+
+  void _addLoadedTexture(int index, int textureId) {
+    if (index == 0 && _textures.isNotEmpty) {
+      return;
+    }
+    if (_textures.any((entry) => entry.textureId == textureId)) {
+      return;
+    }
+    _textures.add(_PreviewTextureEntry(textureId));
+  }
+
+  void _adoptAcceptedPrimaryTexture(PreviewTransformReady event) {
+    final accepted = _previewTransformTracker.readyForTexture(event.textureId);
+    if (accepted == null ||
+        accepted.sessionId != event.sessionId ||
+        accepted.revision != event.revision) {
+      return;
+    }
+
+    final replacement = _PreviewTextureEntry(event.textureId);
+    if (_textures.isEmpty) {
+      _textures.add(replacement);
+    } else if (_textures.first.textureId != event.textureId) {
+      _textures[0] = replacement;
     }
   }
 
@@ -141,12 +224,20 @@ class AwesomeCameraPreviewState extends State<AwesomeCameraPreview> {
   void dispose() {
     _sensorConfigSubscription?.cancel();
     _aspectRatioSubscription?.cancel();
+    _previewTransformSubscription?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_textures.isEmpty || _previewSize == null || _aspectRatio == null) {
+    final transform = _matchingTransform;
+    final effectivePreviewSize = pixelPreviewSize;
+    if (_textures.isEmpty ||
+        _previewSize == null ||
+        _aspectRatio == null ||
+        transform == null ||
+        effectivePreviewSize == null ||
+        _previewTransformFailed) {
       return widget.loadingWidget ??
           Center(
             child: Platform.isIOS
@@ -165,11 +256,12 @@ class AwesomeCameraPreviewState extends State<AwesomeCameraPreview> {
                 child: AnimatedPreviewFit(
                   alignment: widget.alignment,
                   previewFit: widget.previewFit,
-                  previewSize: _previewSize!,
+                  previewSize: effectivePreviewSize,
                   previewPadding: widget.padding,
                   constraints: constraints,
                   sensor: widget.state.sensorConfig.sensors.first,
                   previewDisplayScale: widget.previewDisplayScale,
+                  presentationTransform: transform,
                   onPreviewCalculated: (preview) {
                     WidgetsBinding.instance.addPostFrameCallback((timeStamp) {
                       if (mounted) {
@@ -180,28 +272,38 @@ class AwesomeCameraPreviewState extends State<AwesomeCameraPreview> {
                     });
                   },
                   child: AwesomeCameraGestureDetector(
-                    onPreviewTapBuilder:
-                        widget.onPreviewTap != null && _previewSize != null
-                            ? OnPreviewTapBuilder(
-                                pixelPreviewSizeGetter: () => _previewSize!,
-                                flutterPreviewSizeGetter: () =>
-                                    _previewSize!, //croppedPreviewSize,
-                                onPreviewTap: widget.onPreviewTap!,
-                              )
-                            : null,
+                    onPreviewTapBuilder: widget.onPreviewTap != null
+                        ? OnPreviewTapBuilder(
+                            pixelPreviewSizeGetter: () => effectivePreviewSize,
+                            flutterPreviewSizeGetter: () =>
+                                effectivePreviewSize,
+                            tapPositionMapper: (position) =>
+                                mapPresentationTapToBuffer(
+                              point: position,
+                              presentationSize: effectivePreviewSize.toSize(),
+                              snapshot: transform,
+                            ),
+                            onPreviewTap: widget.onPreviewTap!,
+                          )
+                        : null,
                     onPreviewScale: widget.onPreviewScale,
                     initialZoom: widget.state.sensorConfig.zoom,
                     child: StreamBuilder<AwesomeFilter>(
                       //FIX performances
                       stream: widget.state.filter$,
                       builder: (context, snapshot) {
-                        return snapshot.hasData &&
+                        final texture = _textures.first.texture;
+                        final filteredTexture = snapshot.hasData &&
                                 snapshot.data != AwesomeFilter.None
                             ? ColorFiltered(
                                 colorFilter: snapshot.data!.preview,
-                                child: _textures.first,
+                                child: texture,
                               )
-                            : _textures.first;
+                            : texture;
+                        return PreviewTransformMount(
+                          snapshot: transform,
+                          child: filteredTexture,
+                        );
                       },
                     ),
                   ),
@@ -246,7 +348,7 @@ class AwesomeCameraPreviewState extends State<AwesomeCameraPreview> {
         break;
       }
 
-      final texture = _textures[i];
+      final texture = _textures[i].texture;
       final sensor = sensors[kDebugMode ? 0 : i];
       final frame = AwesomeCameraFloatingPreview(
         index: i,
@@ -268,4 +370,31 @@ class AwesomeCameraPreviewState extends State<AwesomeCameraPreview> {
 
     return previewFrames;
   }
+}
+
+bool _samePresentation(
+  PreviewTransformReady? left,
+  PreviewTransformReady? right,
+) {
+  if (identical(left, right)) {
+    return true;
+  }
+  if (left == null || right == null) {
+    return false;
+  }
+  return left.sessionId == right.sessionId &&
+      left.textureId == right.textureId &&
+      left.presentationQuarterTurns == right.presentationQuarterTurns &&
+      left.bufferSize == right.bufferSize &&
+      left.orientedSize == right.orientedSize &&
+      left.cropRect == right.cropRect &&
+      left.isMirroring == right.isMirroring;
+}
+
+class _PreviewTextureEntry {
+  _PreviewTextureEntry(this.textureId)
+      : texture = Texture(textureId: textureId);
+
+  final int textureId;
+  final Texture texture;
 }

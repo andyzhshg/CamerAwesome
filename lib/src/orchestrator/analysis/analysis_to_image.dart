@@ -9,6 +9,7 @@ class AnalysisPreview {
   final Offset offset;
   final double scale;
   final Sensor? sensor;
+  final PreviewTransformReady? presentationTransform;
 
   AnalysisPreview({
     required this.nativePreviewSize,
@@ -16,6 +17,7 @@ class AnalysisPreview {
     required this.offset,
     required this.scale,
     required this.sensor,
+    this.presentationTransform,
   });
 
   factory AnalysisPreview.hidden() => AnalysisPreview(
@@ -24,6 +26,7 @@ class AnalysisPreview {
         offset: Offset.zero,
         scale: 1,
         sensor: null,
+        presentationTransform: null,
       );
 
   Offset convertPoint(Offset point) {

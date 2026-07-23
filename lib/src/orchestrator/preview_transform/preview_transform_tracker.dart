@@ -1,4 +1,4 @@
-import '../models/preview_transform_snapshot.dart';
+import 'package:camerawesome/src/orchestrator/models/preview_transform_snapshot.dart';
 
 class PreviewTransformTracker {
   int? _sessionId;

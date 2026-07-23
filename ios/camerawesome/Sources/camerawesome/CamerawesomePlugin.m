@@ -94,6 +94,7 @@ FlutterEventSink physicalButtonEventSink;
     self.multiCamera = nil;
   }
   [self.previewTransformPublisher invalidateActiveSession];
+  [self.previewTransformPublisher clearTextureBinding];
   
   _texturesIds = [NSMutableArray new];
   
@@ -191,6 +192,7 @@ FlutterEventSink physicalButtonEventSink;
     });
   }
   [self.previewTransformPublisher invalidateActiveSession];
+  [self.previewTransformPublisher clearTextureBinding];
   
   return @(YES);
 }

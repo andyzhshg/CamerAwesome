@@ -1,6 +1,6 @@
 import 'dart:ui' show Offset;
 
-import '../models/preview_transform_snapshot.dart';
+import 'package:camerawesome/src/orchestrator/models/preview_transform_snapshot.dart';
 
 class PreviewTransformGeometry {
   const PreviewTransformGeometry(this.snapshot);

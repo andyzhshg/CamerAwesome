@@ -8,6 +8,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)setEventSink:(nullable FlutterEventSink)eventSink;
 - (void)startSessionWithMirroring:(BOOL)isMirroring;
 - (void)bindTextureId:(int64_t)textureId;
+- (void)clearTextureBinding;
 - (void)updateBufferWidth:(size_t)bufferWidth height:(size_t)bufferHeight;
 - (void)updateMirroring:(BOOL)isMirroring;
 - (void)invalidateActiveSession;
