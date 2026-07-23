@@ -89,8 +89,8 @@ void main() {
     var fit = tester.widget<AnimatedPreviewFit>(
       find.byType(AnimatedPreviewFit),
     );
-    expect(fit.previewSize.width, 1600);
-    expect(fit.previewSize.height, 1200);
+    expect(fit.previewSize.width, 1200);
+    expect(fit.previewSize.height, 1600);
     expect(
       tester.widget<RotatedBox>(find.byType(RotatedBox)).quarterTurns,
       0,
@@ -107,13 +107,41 @@ void main() {
     await _pumpPreviewFrames(tester);
 
     fit = tester.widget<AnimatedPreviewFit>(find.byType(AnimatedPreviewFit));
-    expect(fit.previewSize.width, 1200);
-    expect(fit.previewSize.height, 1600);
+    expect(fit.previewSize.width, 1600);
+    expect(fit.previewSize.height, 1200);
     expect(
       tester.widget<RotatedBox>(find.byType(RotatedBox)).quarterTurns,
       1,
     );
     expect(find.byType(Texture), findsOneWidget);
+  });
+
+  testWidgets(
+      'initial landscape native size still resolves the landscape stage once',
+      (tester) async {
+    cameraState = _FakePreviewCameraState(
+      previewSize: PreviewSize(width: 1600, height: 1200),
+    );
+    await _pumpPreview(tester, cameraState, transforms.stream);
+    transforms.add(
+      _ready(
+        sessionId: 1,
+        textureId: 7,
+        revision: 1,
+        turns: 1,
+      ),
+    );
+    await _pumpPreviewFrames(tester);
+
+    final fit = tester.widget<AnimatedPreviewFit>(
+      find.byType(AnimatedPreviewFit),
+    );
+    expect(fit.previewSize.width, 1600);
+    expect(fit.previewSize.height, 1200);
+    expect(
+      tester.widget<RotatedBox>(find.byType(RotatedBox)).quarterTurns,
+      1,
+    );
   });
 
   testWidgets(
@@ -206,8 +234,10 @@ PreviewTransformReady _ready({
 }
 
 class _FakePreviewCameraState extends PreviewCameraState {
-  _FakePreviewCameraState()
-      : super(
+  _FakePreviewCameraState({
+    PreviewSize? previewSize,
+  })  : _previewSize = previewSize ?? PreviewSize(width: 1200, height: 1600),
+        super(
           cameraContext: CameraContext.create(
             SensorConfig.single(),
             initialCaptureMode: CaptureMode.preview,
@@ -218,10 +248,10 @@ class _FakePreviewCameraState extends PreviewCameraState {
           ),
         );
 
+  final PreviewSize _previewSize;
+
   @override
-  Future<PreviewSize> previewSize(int index) async {
-    return PreviewSize(width: 1600, height: 1200);
-  }
+  Future<PreviewSize> previewSize(int index) async => _previewSize;
 
   @override
   Future<int?> previewTextureId(int cameraPosition) async => 7;

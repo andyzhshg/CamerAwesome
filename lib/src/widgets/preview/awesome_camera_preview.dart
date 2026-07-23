@@ -71,12 +71,26 @@ class AwesomeCameraPreviewState extends State<AwesomeCameraPreview> {
 
   PreviewSize? get pixelPreviewSize {
     final transform = _matchingTransform;
-    if (transform == null) {
+    final nativePreviewSize = _previewSize;
+    if (transform == null || nativePreviewSize == null) {
       return null;
     }
+
+    final portraitWidth = nativePreviewSize.width <= nativePreviewSize.height
+        ? nativePreviewSize.width
+        : nativePreviewSize.height;
+    final portraitHeight = nativePreviewSize.width <= nativePreviewSize.height
+        ? nativePreviewSize.height
+        : nativePreviewSize.width;
+    if (transform.presentationQuarterTurns.isOdd) {
+      return PreviewSize(
+        width: portraitHeight,
+        height: portraitWidth,
+      );
+    }
     return PreviewSize(
-      width: transform.orientedSize.width,
-      height: transform.orientedSize.height,
+      width: portraitWidth,
+      height: portraitHeight,
     );
   }
 
