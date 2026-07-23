@@ -175,6 +175,8 @@
   // preview always shows the raw sensor image). mlkit input is rotated separately
   // via CopyUprightBGRA8888Bytes so detection works in every device orientation.
   [_captureConnection setVideoOrientation:AVCaptureVideoOrientationPortrait];
+  _lastPublishedPreviewBufferWidth = 0;
+  _lastPublishedPreviewBufferHeight = 0;
   [_previewTransformPublisher startSessionWithMirroring:_captureConnection.videoMirrored];
 }
 
