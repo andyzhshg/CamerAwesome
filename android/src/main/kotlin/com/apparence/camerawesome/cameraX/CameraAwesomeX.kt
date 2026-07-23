@@ -4,14 +4,18 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
+import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.*
+import android.hardware.display.DisplayManager
 import android.hardware.camera2.CameraCharacteristics
 import android.location.Location
 import android.os.*
 import android.util.Log
 import android.util.Rational
 import android.util.Size
+import android.view.Display
+import android.view.Surface
 import androidx.camera.camera2.Camera2Config
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.*
@@ -23,6 +27,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.util.Consumer
 import androidx.exifinterface.media.ExifInterface
 import com.apparence.camerawesome.*
+import com.apparence.camerawesome.cameraX.preview.PreviewTransformPublisher
 import com.apparence.camerawesome.buttons.PhysicalButtonMessageHandler
 import com.apparence.camerawesome.buttons.PhysicalButtonsHandler
 import com.apparence.camerawesome.buttons.PlayerService
@@ -61,10 +66,13 @@ class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
     private var activity: Activity? = null
     private lateinit var imageStreamChannel: EventChannel
     private lateinit var orientationStreamChannel: EventChannel
+    private var previewTransformChannel: EventChannel? = null
     private var orientationStreamListener: OrientationStreamListener? = null
     private val sensorOrientationListener: SensorOrientationListener = SensorOrientationListener()
+    private val previewTransformPublisher = PreviewTransformPublisher()
 
     private lateinit var cameraState: CameraXState
+    private var displayListener: DisplayManager.DisplayListener? = null
     private val cameraPermissions = CameraPermissions()
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private var exifPreferences = ExifPreferences(false)
@@ -156,6 +164,7 @@ class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
             enableImageStream = enableImageStream,
             videoOptions = videoOptions?.android,
             videoRecordingQuality = videoOptions?.quality,
+            previewTransformPublisher = previewTransformPublisher,
             onStreamReady = { state -> state.updateLifecycle(activity!!) }).apply {
             this.updateAspectRatio(aspectRatio)
             this.flashMode = FlashMode.valueOf(flashMode)
@@ -167,6 +176,7 @@ class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
         imageStreamChannel.setStreamHandler(cameraState)
         if (mode != CaptureModes.ANALYSIS_ONLY) {
             cameraState.updateLifecycle(activity!!)
+            applyCurrentDisplayRotation()
             // Zoom should be set after updateLifeCycle
             if (zoom > 0) {
                 // TODO Find a better way to set initial zoom than using a postDelayed
@@ -810,9 +820,16 @@ class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
         EventChannel(binding.binaryMessenger, "camerawesome/physical_button").setStreamHandler(
             physicalButtonHandler
         )
+        previewTransformChannel =
+            EventChannel(binding.binaryMessenger, "camerawesome/preview_transform").also {
+                it.setStreamHandler(previewTransformPublisher)
+            }
     }
 
     override fun onDetachedFromEngine(binding: FlutterPluginBinding) {
+        previewTransformPublisher.invalidateActiveSession()
+        previewTransformChannel?.setStreamHandler(null)
+        previewTransformChannel = null
         this.binding = null
     }
 
@@ -820,21 +837,80 @@ class CameraAwesomeX : CameraInterface, FlutterPlugin, ActivityAware {
         activity = binding.activity
         binding.addRequestPermissionsResultListener(cameraPermissions)
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(binding.activity)
+        registerDisplayListener()
     }
 
     override fun onDetachedFromActivityForConfigChanges() {
+        unregisterDisplayListener()
         activity = null
     }
 
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
         activity = binding.activity
         binding.addRequestPermissionsResultListener(cameraPermissions)
+        registerDisplayListener()
     }
 
     override fun onDetachedFromActivity() {
+        unregisterDisplayListener()
         activity = null
         cancellationTokenSource.cancel()
         cameraPermissions.onCancel(null)
+    }
+
+    private fun currentDisplay(currentActivity: Activity): Display? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            currentActivity.display
+        } else {
+            @Suppress("DEPRECATION")
+            currentActivity.windowManager.defaultDisplay
+        }
+    }
+
+    private fun applyCurrentDisplayRotation() {
+        if (!::cameraState.isInitialized) {
+            return
+        }
+        val currentActivity = activity ?: return
+        val display = currentDisplay(currentActivity) ?: return
+        cameraState.updatePreviewTargetRotation(display.rotation)
+    }
+
+    private fun registerDisplayListener() {
+        if (displayListener != null) {
+            return
+        }
+        val currentActivity = activity ?: return
+        val displayManager =
+            currentActivity.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) {}
+
+            override fun onDisplayRemoved(displayId: Int) {}
+
+            override fun onDisplayChanged(displayId: Int) {
+                val latestActivity = activity ?: return
+                val display = currentDisplay(latestActivity) ?: return
+                if (display.displayId != displayId) {
+                    return
+                }
+                applyCurrentDisplayRotation()
+            }
+        }
+        displayManager.registerDisplayListener(listener, Handler(Looper.getMainLooper()))
+        displayListener = listener
+        applyCurrentDisplayRotation()
+    }
+
+    private fun unregisterDisplayListener() {
+        val listener = displayListener ?: return
+        val currentActivity = activity
+        if (currentActivity != null) {
+            val displayManager =
+                currentActivity.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+            displayManager.unregisterDisplayListener(listener)
+        }
+        displayListener = null
     }
 
 }

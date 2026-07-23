@@ -19,6 +19,7 @@ import androidx.camera.video.*
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.apparence.camerawesome.CamerawesomePlugin
+import com.apparence.camerawesome.cameraX.preview.PreviewTransformPublisher
 import com.apparence.camerawesome.models.FlashMode
 import com.apparence.camerawesome.sensors.SensorOrientation
 import com.apparence.camerawesome.utils.isMultiCamSupported
@@ -52,6 +53,7 @@ data class CameraXState(
     var mirrorFrontCamera: Boolean = false,
     val videoRecordingQuality: VideoRecordingQuality?,
     val videoOptions: AndroidVideoOptions?,
+    val previewTransformPublisher: PreviewTransformPublisher,
 ) : EventChannel.StreamHandler, SensorOrientation {
 
     var imageAnalysisBuilder: ImageAnalysisBuilder? = null
@@ -91,6 +93,7 @@ data class CameraXState(
 
     @SuppressLint("RestrictedApi", "UnsafeOptInUsageError")
     fun updateLifecycle(activity: Activity) {
+        previewTransformPublisher.invalidateActiveSession()
         previews = mutableListOf()
         imageCaptures.clear()
         videoCaptures.clear()
@@ -269,6 +272,7 @@ data class CameraXState(
             )
             previewCamera!!.cameraControl.enableTorch(flashMode == FlashMode.ALWAYS)
         }
+        updatePreviewTargetRotation(displayRotation(activity))
     }
 
     private fun getResolutionSelector(aspectRatio: Int): ResolutionSelector {
@@ -325,8 +329,30 @@ data class CameraXState(
     private fun surfaceProvider(executor: Executor, cameraId: String): Preview.SurfaceProvider {
         return Preview.SurfaceProvider { request: SurfaceRequest ->
             val resolution = request.resolution
-            val texture = textureEntries[cameraId]!!.surfaceTexture()
+            val textureEntry = textureEntries[cameraId]!!
+            val texture = textureEntry.surfaceTexture()
+            val sessionId = previewTransformPublisher.startSession(
+                textureId = textureEntry.id(),
+                bufferWidth = resolution.width,
+                bufferHeight = resolution.height,
+            )
             texture.setDefaultBufferSize(resolution.width, resolution.height)
+            request.setTransformationInfoListener(executor) { info ->
+                val sensorRotationDegrees = try {
+                    mainCameraInfos.sensorRotationDegrees
+                } catch (error: Exception) {
+                    previewTransformPublisher.invalidateSession(sessionId)
+                    return@setTransformationInfoListener
+                }
+                previewTransformPublisher.publish(
+                    sessionId = sessionId,
+                    transformationRotationDegrees = info.rotationDegrees,
+                    sensorRotationDegrees = sensorRotationDegrees,
+                    cropRect = info.cropRect,
+                    isMirroring = info.isMirroring,
+                    hasCameraTransform = info.hasCameraTransform(),
+                )
+            }
             val surface = Surface(texture)
             request.provideSurface(surface, executor) {
                 surface.release()
@@ -422,7 +448,14 @@ data class CameraXState(
     }
 
     fun stop() {
+        previewTransformPublisher.invalidateActiveSession()
         cameraProvider.unbindAll()
+    }
+
+    fun updatePreviewTargetRotation(rotation: Int) {
+        previews?.forEach { preview ->
+            preview.targetRotation = rotation
+        }
     }
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
