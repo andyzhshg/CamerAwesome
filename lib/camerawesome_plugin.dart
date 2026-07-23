@@ -14,6 +14,7 @@ export 'src/orchestrator/analysis/analysis_controller.dart';
 export 'src/orchestrator/models/models.dart';
 export 'src/orchestrator/models/sensor_type.dart';
 export 'src/orchestrator/models/sensors.dart';
+export 'src/orchestrator/preview_transform/preview_transform_geometry.dart';
 export 'src/orchestrator/states/states.dart';
 export 'src/widgets/camera_awesome_builder.dart';
 export 'src/orchestrator/analysis/analysis_to_image.dart';
