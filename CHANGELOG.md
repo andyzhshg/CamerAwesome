@@ -1,3 +1,14 @@
+# Daily Cam fork (unreleased)
+
+- Add a typed native preview-transform stream with session/texture/revision
+  readiness tracking.
+- Publish Android CameraX and iOS window-scene presentation transforms without
+  rotating shared capture buffers.
+- Apply one compositor-level quarter-turn at the Flutter texture mount and
+  expose canonical forward/inverse geometry to host overlays.
+- Keep front-camera mirroring in the native texture path and reject stale,
+  unsupported, or non-full-crop snapshots.
+
 # 2.5.0
 - Fix iOS camera zoom change crash (thanks @haf and @chaosue) 
 - Fix camera preview not accurate with the result photo

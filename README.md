@@ -43,6 +43,31 @@ This plugin is also available as a template in
     </a>
 </div>
 
+## Daily Cam fork: preview transform contract
+
+This fork keeps camera capture buffers unchanged and adds a presentation-only
+transform contract for Flutter windows that can rotate:
+
+- The upstream internal `portraitUp` orientation writer is intentionally not
+  restored. The host app owns route orientation.
+- Native code publishes `ready` and `invalidated` events on
+  `camerawesome/preview_transform`. A ready event atomically contains
+  `sessionId`, `textureId`, `revision`, quarter turns, buffer/oriented size,
+  crop, mirroring, and transform availability.
+- Android derives quarter turns from one CameraX transformation revision:
+  `rotationDegrees - sensorRotationDegrees`, with the sign folded for an
+  already-mirrored front texture. This is independent of whether the device's
+  natural orientation is portrait or landscape.
+- iOS maps the `UIWindowScene.interfaceOrientation` that hosts Flutter. It
+  does not rotate the shared capture output or use physical device gravity.
+- Dart applies pixels exactly once in
+  `preview_transform_mount.dart`. New or rebound textures remain behind the
+  loading placeholder until a matching `(sessionId, textureId)` snapshot is
+  ready; stale revisions are rejected.
+- Still EXIF, video orientation, analysis-buffer orientation, and front-camera
+  mirror behavior are not rewritten. Non-full crop or unavailable native
+  transform fails closed instead of being silently stretched.
+
 [![en](https://img.shields.io/badge/language-english-cyan.svg)](https://github.com/Apparence-io/CamerAwesome/blob/master/README.md)
 [![zh](https://img.shields.io/badge/language-chinese-cyan.svg)](https://github.com/Apparence-io/CamerAwesome/blob/master/README.zh.md)
 
