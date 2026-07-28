@@ -405,8 +405,25 @@ class _CameraWidgetBuilder extends State<CameraAwesomeBuilder>
       availableFilters: widget.availableFilters,
     );
 
-    // Initial CameraState is always PreparingState
-    _cameraContext.state.when(onPreparingCamera: (mode) => mode.start());
+    // Initial CameraState is always PreparingState.
+    // Startup runs detached from the widget lifecycle: left bare, a failure
+    // becomes an unhandled async error, the preview stays on the progress
+    // indicator forever, and the host app gets no signal. Route it through
+    // FlutterError so the app's error reporting sees it.
+    _cameraContext.state.when(
+      onPreparingCamera: (mode) => unawaited(
+        mode.start().catchError((Object error, StackTrace stackTrace) {
+          FlutterError.reportError(
+            FlutterErrorDetails(
+              exception: error,
+              stack: stackTrace,
+              library: 'camerawesome',
+              context: ErrorDescription('while starting the camera'),
+            ),
+          );
+        }),
+      ),
+    );
 
     _captureStateListener = _cameraContext.captureState$.listen((mediaCapture) {
       if (mediaCapture != null) {
