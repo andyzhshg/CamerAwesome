@@ -105,14 +105,18 @@ void main() {
       );
     });
 
-    test('rejects a non-full crop', () {
+    test('accepts a non-full crop as informational metadata', () {
+      // Landscape sensor buffer cropped by the ViewPort to the capture aspect.
       final map = _readyMap()
-        ..['cropLeft'] = 1
-        ..['cropWidth'] = 1599;
+        ..['cropLeft'] = 350
+        ..['cropWidth'] = 900;
 
+      final event = PreviewTransformEvent.fromMap(map);
+
+      expect(event, isA<PreviewTransformReady>());
       expect(
-        () => PreviewTransformEvent.fromMap(map),
-        throwsA(isA<FormatException>()),
+        (event as PreviewTransformReady).cropRect,
+        const Rect.fromLTWH(350, 0, 900, 1200),
       );
     });
 

@@ -59,17 +59,10 @@ sealed class PreviewTransformEvent {
             cropRect.bottom > bufferSize.height) {
           throw const FormatException('cropRect is outside the buffer.');
         }
-        final fullBufferRect = Rect.fromLTWH(
-          0,
-          0,
-          bufferSize.width,
-          bufferSize.height,
-        );
-        if (cropRect != fullBufferRect) {
-          throw const FormatException(
-            'Only a full-buffer crop is currently supported.',
-          );
-        }
+        // cropRect may be smaller than the full buffer: the ViewPort applies the
+        // capture aspect to a landscape sensor buffer. The preview shows the full
+        // oriented buffer FOV; cropRect is informational (overlay/capture-FOV
+        // mapping) and only has to stay within the buffer (checked above).
         if (!hasCameraTransform) {
           throw const FormatException(
             'The native camera transform is unavailable.',

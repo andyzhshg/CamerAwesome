@@ -61,15 +61,17 @@ class PreviewTransformPublisher : EventChannel.StreamHandler {
             return
         }
 
-        val isFullBufferCrop = cropRect.left == 0 &&
-            cropRect.top == 0 &&
-            cropRect.right == session.bufferWidth &&
-            cropRect.bottom == session.bufferHeight
-        if (!hasCameraTransform || !isFullBufferCrop) {
+        // The ViewPort applies the capture aspect (3:4) to a landscape 4:3 sensor
+        // buffer, so cropRect is legitimately smaller than the full buffer when the
+        // window is landscape. The preview shows the full oriented buffer FOV
+        // (historical CamerAwesome behavior; the tighter capture crop lives on
+        // imageCapture), and cropRect travels as informational metadata. Only a
+        // missing camera transform is a real rejection.
+        if (!hasCameraTransform) {
             Log.w(
                 TAG,
                 "Rejecting preview transform session=$sessionId " +
-                    "hasCameraTransform=$hasCameraTransform crop=$cropRect " +
+                    "missing camera transform crop=$cropRect " +
                     "buffer=${session.bufferWidth}x${session.bufferHeight}",
             )
             session.revision += 1
